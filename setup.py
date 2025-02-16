@@ -16,6 +16,7 @@ import shutil
 from typing import List, Tuple
 
 from setuptools import setup, find_packages, Command
+import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtension
 
 try:
@@ -57,7 +58,7 @@ class Tester(Command):
 def install(use_cuda, use_nccl):
     ext_libs = []
     if pf.system() == 'Linux':
-        ext_args = ['-Wno-sign-compare', '-Wno-unused-but-set-variable', '-Wno-terminate', '-Wno-unused-function', '-Wno-strict-aliasing']
+        ext_args = ['-w']
     elif pf.system() == 'Darwin':
         ext_args = ['-mmacosx-version-min=10.13']
     else:
@@ -80,7 +81,7 @@ def install(use_cuda, use_nccl):
 
     setup(
         name='tutel',
-        version='0.3',
+        version='0.4',
         description='An Optimized Mixture-of-Experts Implementation.',
         url='https://github.com/microsoft/Tutel',
         author='Microsoft',
@@ -138,16 +139,14 @@ def install(use_cuda, use_nccl):
         },
     )
 
-if int(os.environ.get('NO_CUDA', 0)) == 1:
-    print('Installing without CUDA extension..')
-    install(use_cuda=False, use_nccl=False)
-else:
+if (torch.version.cuda or torch.version.hip) and int(os.environ.get('NO_CUDA', 0)) == 0:
     try:
+        print('Try installing with NCCL extension..')
         install(use_cuda=True, use_nccl=True)
     except:
         print('Try installing without NCCL extension..')
-        try:
-            install(use_cuda=True, use_nccl=False)
-        except:
-            print('Try installing without CUDA extension..')
-            install(use_cuda=False, use_nccl=False)
+        install(use_cuda=True, use_nccl=False)
+else:
+    print('Installing without CUDA extension..')
+    install(use_cuda=False, use_nccl=False)
+

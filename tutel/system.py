@@ -40,6 +40,7 @@ def init_data_model_parallel(group_count=1, backend='nccl'):
             dist.destroy_process_group()
         except:
             pass
+        os._exit(0)
 
     import atexit
     atexit.register(lambda *args: on_quit())
