@@ -989,6 +989,119 @@ torch::Tensor warp_lnorm_f16(const torch::Tensor &x, const torch::Tensor &rms_ff
   return antares::ops::call("lnorm_f16", {x, rms_ffn_w}, {eps}).view(x.sizes());
 }
 
+namespace {
+  torch::Tensor key_cache;
+  torch::Tensor val_cache;
+  std::vector<torch::Tensor> weight_gate_ups;
+  std::vector<torch::Tensor> weight_gate_up_scals;
+  std::vector<torch::Tensor> weight_downs;
+  std::vector<torch::Tensor> weight_down_scals;
+  std::vector<torch::Tensor> moe_gate_up_ws;
+  std::vector<torch::Tensor> moe_gate_up_ss;
+  std::vector<torch::Tensor> moe_down_ws;
+  std::vector<torch::Tensor> moe_down_ss;
+  std::vector<torch::Tensor> gate_moes;
+  std::vector<torch::Tensor> gate_biases;
+  std::vector<torch::Tensor> rms_att_ws;
+  std::vector<torch::Tensor> rms_ffn_ws;
+  std::vector<torch::Tensor> qkv_a_projs;
+  std::vector<torch::Tensor> qkv_a_proj_scals;
+  std::vector<torch::Tensor> q_a_norms;
+  std::vector<torch::Tensor> kv_a_norms;
+  std::vector<torch::Tensor> q_b_projs;
+  std::vector<torch::Tensor> q_b_proj_scals;
+  std::vector<torch::Tensor> kv_b_projs;
+  std::vector<torch::Tensor> kv_b_proj_scals;
+  std::vector<torch::Tensor> o_projs;
+  std::vector<torch::Tensor> o_proj_scals;
+  torch::Tensor shared_exp_id, topk_exp_id, score_weight, rms_end_w;
+}
+
+void warp_deepseek_r1_prepare_weights(
+  const torch::Tensor &key_cache,
+  const torch::Tensor &val_cache,
+  const torch::Tensor &shared_exp_id,
+  const torch::Tensor &topk_exp_id,
+  const torch::Tensor &score_weight,
+  const torch::Tensor &rms_end_w,
+
+  const std::vector<torch::Tensor> &rms_att_ws,
+  const std::vector<torch::Tensor> &rms_ffn_ws,
+  const std::vector<torch::Tensor> &qkv_a_projs,
+  const std::vector<torch::Tensor> &qkv_a_proj_scals,
+  const std::vector<torch::Tensor> &q_a_norms,
+  const std::vector<torch::Tensor> &kv_a_norms,
+  const std::vector<torch::Tensor> &q_b_projs,
+  const std::vector<torch::Tensor> &q_b_proj_scals,
+  const std::vector<torch::Tensor> &kv_b_projs,
+  const std::vector<torch::Tensor> &kv_b_proj_scals,
+  const std::vector<torch::Tensor> &o_projs,
+  const std::vector<torch::Tensor> &o_proj_scals,
+
+  const std::vector<torch::Tensor> &weight_gate_ups,
+  const std::vector<torch::Tensor> &weight_gate_up_scals,
+  const std::vector<torch::Tensor> &weight_downs,
+  const std::vector<torch::Tensor> &weight_down_scals,
+  const std::vector<torch::Tensor> &moe_gate_up_ws,
+  const std::vector<torch::Tensor> &moe_gate_up_ss,
+  const std::vector<torch::Tensor> &moe_down_ws,
+  const std::vector<torch::Tensor> &moe_down_ss,
+  const std::vector<torch::Tensor> &gate_moes,
+  const std::vector<torch::Tensor> &gate_biases
+) {
+  ::key_cache = key_cache;
+  ::val_cache = val_cache;
+  ::weight_gate_ups = weight_gate_ups;
+  ::weight_gate_ups = weight_gate_ups;
+  ::weight_gate_up_scals = weight_gate_up_scals;
+  ::weight_downs = weight_downs;
+  ::weight_down_scals = weight_down_scals;
+  ::moe_gate_up_ws = moe_gate_up_ws;
+  ::moe_gate_up_ss = moe_gate_up_ss;
+  ::moe_down_ws = moe_down_ws;
+  ::moe_down_ss = moe_down_ss;
+  ::gate_moes = gate_moes;
+  ::gate_biases = gate_biases;
+  ::rms_end_w = rms_end_w;
+  ::rms_att_ws = rms_att_ws;
+  ::rms_ffn_ws = rms_ffn_ws;
+  ::qkv_a_projs = qkv_a_projs;
+  ::qkv_a_proj_scals = qkv_a_proj_scals;
+  ::q_a_norms = q_a_norms;
+  ::kv_a_norms = kv_a_norms;
+  ::q_b_projs = q_b_projs;
+  ::q_b_proj_scals = q_b_proj_scals;
+  ::kv_b_projs = kv_b_projs;
+  ::kv_b_proj_scals = kv_b_proj_scals;
+  ::o_projs = o_projs;
+  ::o_proj_scals = o_proj_scals;
+
+  ::shared_exp_id = shared_exp_id;
+  ::topk_exp_id = topk_exp_id;
+  ::score_weight = score_weight;
+}
+
+torch::Tensor warp_deepseek_r1_forward(
+  const torch::Tensor &data,
+  int64_t pos
+) {
+    CHECK_CUDA(data);
+    auto x = data;
+    #pragma unroll
+    for (int l = 0; l < rms_att_ws.size(); ++l) {
+      auto xb = warp_deepseek_r1_latent_attn_f16(x, key_cache[l], val_cache[l], rms_att_ws[l], qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], pos);
+      x = warp_x_add_allreduce_y_f16(x, xb);
+      xb = warp_lnorm_f16(x, rms_ffn_ws[l], 1e-6f);
+      if (l < weight_gate_ups.size())
+        xb = warp_glu_expert_f16xf8_block_scal(xb, shared_exp_id, score_weight.narrow(0, 0, 1), weight_gate_ups[l], weight_gate_up_scals[l], weight_downs[l], weight_down_scals[l]);
+      else {
+        warp_deepseek_r1_static_gating_f16(xb.view({1, 1, -1}), gate_moes[l - 3], gate_biases[l - 3], score_weight.narrow(0, 1, score_weight.size(0) - 1).view({1, -1}), topk_exp_id.narrow(0, 1, topk_exp_id.size(0) - 1).view({1, -1}));
+        xb = warp_glu_expert_f16xf8_block_scal(xb.view({-1}), topk_exp_id.view({-1}), score_weight.view({-1}), moe_gate_up_ws[l - 3], moe_gate_up_ss[l - 3], moe_down_ws[l - 3], moe_down_ss[l - 3]);
+      }
+      x = warp_x_add_allreduce_y_f16(x, xb);
+    }
+    return warp_lnorm_f16(x, rms_end_w, 1e-6);
+}
 
 TORCH_LIBRARY(tutel_ops, m) {
   m.def("cumsum", warp_cumsum);
@@ -1001,5 +1114,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("x_add_allreduce_y_f16", &warp_x_add_allreduce_y_f16);
   m.def("deepseek_r1_static_gating_f16", warp_deepseek_r1_static_gating_f16);
   m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_latent_attn_f16);
+  m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
+  m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
 }
 #endif
