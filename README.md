@@ -29,6 +29,14 @@ We compare three solutions that support <ins>Full-Precision Inference (PPL = 0) 
         --model_path ./deepseek-ai/DeepSeek-R1 \
         --prompt "Calculate the result of: 1 / (sqrt(5) - sqrt(3))"
 
+    # Step-3: Using 8 MI300 GPUs to Serve Deepseek R1 Chat on Local Port :8000
+    docker run -it --rm --ipc=host --privileged -p 8000:8000 \
+        -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-chat-20250224 \
+        --model_path ./deepseek-ai/DeepSeek-R1
+
+    # Step-4: Issue a Prompt Request with curl
+    curl -X POST http://0.0.0.0:8000/chat -d '{"text": "求1/sin(x) + x的不定积分"}'
+
 ```
 
 - Tutel v0.3.3: Add all-to-all benchmark:

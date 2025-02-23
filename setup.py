@@ -140,10 +140,10 @@ def install(use_cuda, use_nccl):
     )
 
 if (torch.version.cuda or torch.version.hip) and int(os.environ.get('NO_CUDA', 0)) == 0:
-    try:
+    if int(os.environ.get('NO_NCCL', 0)) == 0:
         print('Try installing with NCCL extension..')
         install(use_cuda=True, use_nccl=True)
-    except:
+    else:
         print('Try installing without NCCL extension..')
         install(use_cuda=True, use_nccl=False)
 else:
