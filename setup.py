@@ -113,6 +113,7 @@ def install(use_cuda, use_nccl):
         install_requires=[
             "numpy",
         ],
+        include_package_data=True,
         zip_safe=False,
         extras_require={
             'test': [

@@ -904,6 +904,7 @@ torch::Tensor warp_gemv_nt_fp16xfp8_block_scal(const torch::Tensor &x, const tor
 
 torch::Tensor warp_lnorm_f16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps) {
   CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kFloat16);
   return antares::ops::call("lnorm_f16", {x, rms_w}, {eps}).view(x.sizes());
 }
 
@@ -1107,6 +1108,31 @@ void warp_bcast_index(const torch::Tensor &t, int64_t root) {
   ncclBcast(t.data_ptr(), t.numel(), ncclInt64, root, (ncclComm_t)shared_nccl_comm, stream);
 }
 
+std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_top_8_static(
+     const torch::Tensor &sigmoid_score_f32,
+     const torch::Tensor &moe_gate_b_f32,
+     const ::std::optional<torch::Tensor> &top_v_out_,
+     const ::std::optional<torch::Tensor> &top_k_out_) {
+  CHECK_CUDA(sigmoid_score_f32);
+  AT_ASSERTM(sigmoid_score_f32.size(-1) == 256, "Deepseek R1 requires 256 experts for gating.");
+  int samples = sigmoid_score_f32.numel() / sigmoid_score_f32.size(-1);
+
+  auto device = sigmoid_score_f32.device();
+  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt64).device(device));
+  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt64, "Output tensor space should be float32 for top_scores and int64 for top_ids.");
+
+  antares::ops::call("deepseek_r1_top_k_f32", {sigmoid_score_f32.view({samples, -1}), moe_gate_b_f32.to(torch::kFloat32), top_v_out, top_k_out}, {}, false, 0, 3);
+  return {top_v_out, top_k_out};
+}
+
+torch::Tensor warp_rmsnorm_f16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps) {
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}), rms_w}, {eps}).view(x.sizes());
+}
+
+
 TORCH_LIBRARY(tutel_ops, m) {
   m.def("cumsum", warp_cumsum);
   m.def("sparse_bmm_infer", warp_sparse_bmm_infer);
@@ -1121,5 +1147,8 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_latent_attn_f16);
   m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
+
+  m.def("deepseek_top_8_static", warp_deepseek_top_8_static);
+  m.def("rmsnorm_bf16", warp_rmsnorm_f16);
 }
 #endif
