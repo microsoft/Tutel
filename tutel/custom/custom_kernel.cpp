@@ -897,34 +897,88 @@ torch::Tensor warp_sparse_bmm_infer(const torch::Tensor &x, const torch::Tensor 
   return y;
 }
 
+void show(const std::vector<torch::Tensor> &xs) {
+  if (shared_world_rank != 0)
+    return;
+  puts("=======================");
+  for (auto &x: xs) {
+    printf("[");
+    for (int i = 0; i < x.dim(); ++i) printf("%d, ", x.size(i));
+    printf("] data = ");
+    auto x_ = x.to(torch::kFloat32).to(torch::kCPU);
+    for (int i = 0; i < 5; ++i) printf("%g, ", x_.data_ptr<float>()[i]);
+    printf("..");
+    for (int i = 0; i < 5; ++i) printf("%g, ", x_.data_ptr<float>()[x.numel() - 5 + i]);
+    puts("");
+  }
+}
+
 torch::Tensor warp_gemv_nt_fp16xfp8_block_scal(const torch::Tensor &x, const torch::Tensor &w, const torch::Tensor &scal) {
   CHECK_CUDA(x);
-  return antares::ops::call("gemv_nt_fp16xfp8_block_scal", {x.view({-1}).view(x.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), w.view(torch::kInt16), scal}, {});
+  CHECK_EQ(x.dim(), 3);
+  return antares::ops::call("gemv_nt_fp32xfp8_block", {x.view({-1, x.size(-1)}).view(x.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), w.view(torch::kInt16), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
 }
 
 torch::Tensor warp_lnorm_f16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps) {
   CHECK_CUDA(x);
-  CHECK_EQ(x.dtype(), torch::kFloat16);
-  return antares::ops::call("lnorm_f16", {x, rms_w}, {eps}).view(x.sizes());
+  CHECK_EQ(x.dtype(), torch::kFloat32);
+  CHECK_EQ(rms_w.dtype(), torch::kFloat32);
+  return antares::ops::call("lnorm_2d_f32", {x.view({-1, x.size(-1)}), rms_w.view({-1})}, {eps}).view(x.sizes());
 }
 
-torch::Tensor warp_deepseek_r1_static_gating_f16(
+std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_top_8_static(
+     const torch::Tensor &sigmoid_score_f32,
+     const torch::Tensor &moe_gate_b_f32,
+     const ::std::optional<torch::Tensor> &top_v_out_,
+     const ::std::optional<torch::Tensor> &top_k_out_) {
+  CHECK_CUDA(sigmoid_score_f32);
+  AT_ASSERTM(sigmoid_score_f32.size(-1) == 256, "Deepseek R1 requires 256 experts for gating.");
+  int samples = sigmoid_score_f32.numel() / sigmoid_score_f32.size(-1);
+
+  auto device = sigmoid_score_f32.device();
+  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt64).device(device));
+  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt64, "Output tensor space should be float32 for top_scores and int64 for top_ids.");
+
+  antares::ops::call("deepseek_r1_top_k_f32", {sigmoid_score_f32.view({samples, -1}), moe_gate_b_f32.to(torch::kFloat32), top_v_out, top_k_out}, {}, false, 0, 3);
+  return {top_v_out, top_k_out};
+}
+
+std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static(
+     const torch::Tensor &logits_bf16,
+     const torch::Tensor &moe_gate_b_bf16,
+     const ::std::optional<torch::Tensor> &top_v_out_,
+     const ::std::optional<torch::Tensor> &top_k_out_) {
+  CHECK_CUDA(logits_bf16);
+  CHECK_EQ(logits_bf16.dtype(), torch::kBFloat16);
+  CHECK_EQ(moe_gate_b_bf16.dtype(), torch::kBFloat16);
+
+  int n_experts = logits_bf16.size(-1);
+  AT_ASSERTM(n_experts == 256, "Deepseek R1 requires 256 experts for gating.");
+  int samples = logits_bf16.numel() / n_experts;
+
+  auto device = logits_bf16.device();
+  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt32, "Output tensor space should be float32 for top_scores and int32 for top_ids.");
+
+  antares::ops::call("deepseek_r1_sigmoid_top_k_f32", {logits_bf16.view({samples, n_experts}), moe_gate_b_bf16, top_v_out, top_k_out}, {}, false, 0, 3);
+  return {top_v_out, top_k_out};
+}
+
+void warp_deepseek_r1_static_gating_f16(
      const torch::Tensor &x,
      const torch::Tensor &gate_moe,
      const torch::Tensor &gate_bias,
      const ::std::optional<torch::Tensor> &top_v_out_,
      const ::std::optional<torch::Tensor> &top_k_out_) {
   CHECK_CUDA(x);
-  AT_ASSERTM(gate_moe.size(0) == 256, "Deepseek R1 requires 256 experts for gating.");
-  AT_ASSERTM(x.numel() == x.size(-1), "Batch size > 1 not enabled in this version.");
+  CHECK_EQ(x.dtype(), torch::kFloat32);
+  CHECK_EQ(gate_moe.dtype(), torch::kBFloat16);
+  CHECK_EQ(gate_bias.dtype(), torch::kBFloat16);
 
-  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({1, -1}) : torch::empty({1, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(x.device()));
-  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({1, -1}) : torch::empty({1, 8}, torch::TensorOptions().dtype(torch::kInt64).device(x.device()));
-  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt64, "Output tensor space should be float32 for top_scores and int64 for top_ids.");
-
-  auto gate_scores = antares::ops::call("sigmoid_gemm_out", {x.view(x.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32).view({-1}), gate_moe.view(gate_moe.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32)}, {});
-  antares::ops::call("deepseek_r1_top_k_f32", {gate_scores.view({1, -1}), gate_bias.to(torch::kFloat32), top_v_out, top_k_out}, {}, false, 0, 3);
-  return top_k_out;
+  auto logits_bf16 = torch::matmul(x.to(torch::kBFloat16), gate_moe.to(torch::kBFloat16).t()).to(torch::kBFloat16);
+  warp_deepseek_sigmoid_top_8_static(logits_bf16.view({-1, logits_bf16.size(-1)}), gate_bias, top_v_out_, top_k_out_);
 }
 
 torch::Tensor warp_deepseek_r1_latent_attn_f16(
@@ -945,32 +999,38 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
   int64_t pos
 ) {
     CHECK_CUDA(data);
+    CHECK_EQ(data.dim(), 3);
     auto x = data;
+    int batch = x.size(0), seqlen = x.size(1), n_heads = key_cache.size(-2);
     auto xb = warp_lnorm_f16(x, rms_att_w, 1e-6f);
-    auto qkv = warp_gemv_nt_fp16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal).view({1, 1, -1});
-    auto q = qkv.narrow(-1, 0, 1536), kv = qkv.narrow(-1, 1536, 512), k_pe = qkv.narrow(-1, 2048, 64);
+    auto qkv = warp_gemv_nt_fp16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
+    auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
     auto k_pe_out = torch::empty_like(k_pe);
     antares::ops::call("rotary_emb_f16", {k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
     q = warp_gemv_nt_fp16xfp8_block_scal(warp_lnorm_f16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
     kv = warp_gemv_nt_fp16xfp8_block_scal(warp_lnorm_f16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
-    auto query_states = q.view({1, 1, -1, 192});
+    auto query_states = q.view({batch, seqlen, -1, 192});
     auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
     auto q_pe_out = torch::empty_like(q_pe);
     antares::ops::call("rotary_emb_f16", {q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
-    antares::ops::call("cache_fill_f16", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
-    antares::ops::call("cache_move_f16", {kv.view({-1, 2, 128}), key_cache.select(0, pos), val_cache.select(0, pos)}, {}, false, 0, 2);
-    auto key_states = key_cache.narrow(0, 0, pos + 1).unsqueeze(0);
-    auto value_states = val_cache.narrow(0, 0, pos + 1).unsqueeze(0);
+
+    antares::ops::call("cache_fill_f32", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
+                                      // [B,S,H,64]  [B,S,64]  [B,S,H,128:]    [B,H,128:]
+
+    antares::ops::call("cache_move_f32", {kv.view({batch, seqlen, n_heads, 2, 128}), key_cache.narrow(0, pos, seqlen), val_cache.narrow(0, pos, seqlen)}, {}, false, 0, 2);
+                                                 // [B,S,H,2,M]                                [S,B,H,:128]                 [S,B,H,:128]
+
+    auto key_states = key_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 192});
+    auto value_states = val_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 128});
 
     if (pos >= 63) {
-      int n_heads = query_states.size(2);
       auto lm = torch::empty({2, n_heads, 64}, torch::TensorOptions().dtype(torch::kFloat32).device(query_states.device()));
       auto attn_output = antares::ops::call("self_attn_infer_f16", {query_states.squeeze(0).squeeze(0), key_states.squeeze(0), value_states.squeeze(0), lm}, {0.1352337788608801f});
-      x = torch::matmul(antares::ops::call("self_attn_reduce_f16", {lm}, {}).unsqueeze(1), attn_output).view({-1}).to(query_states.dtype());
+      x = torch::matmul(antares::ops::call("self_attn_reduce_f16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
     } else {
       x = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}), key_states.permute({0, 2, 1, 3}), value_states.permute({0, 2, 1, 3}), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
     }
-    return warp_gemv_nt_fp16xfp8_block_scal(x, o_proj, o_proj_scal).view({1, 1, -1});
+    return warp_gemv_nt_fp16xfp8_block_scal(x.view({batch, seqlen, -1}), o_proj, o_proj_scal);
 }
 
 torch::Tensor warp_glu_expert_f16xf8_block_scal(
@@ -983,8 +1043,12 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
   const torch::Tensor &moe_down_s) {
 
   CHECK_CUDA(x);
-  auto xb = antares::ops::call("half2_gemm_silu_left_mul_right", {x.view({-1}), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s.view(torch::kInt64)}, {});
-  return antares::ops::call("half2_gemm_mul_sum", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({-1, 1, moe_down_w.size(1)});
+  CHECK_EQ(expert_ids.dim(), 2);
+  CHECK_EQ(expert_weight.dim(), 2);
+  auto &expert_ids_ = expert_ids;
+
+  auto xb = antares::ops::call("gemm_silu_left_mul_right_f32", {x.view({-1, x.size(-1)}), expert_ids_, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s.view(torch::kInt64)}, {});
+  return antares::ops::call("gemm_sum_mul_weight_f32", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids_, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
 }
 
 namespace {
@@ -1012,13 +1076,14 @@ namespace {
   std::vector<torch::Tensor> kv_b_proj_scals;
   std::vector<torch::Tensor> o_projs;
   std::vector<torch::Tensor> o_proj_scals;
-  torch::Tensor shared_exp_id, topk_exp_id, score_weight, rms_end_w;
+  torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
 }
 
 void warp_deepseek_r1_prepare_weights(
   const torch::Tensor &key_cache,
   const torch::Tensor &val_cache,
   const torch::Tensor &shared_exp_id,
+  const torch::Tensor &shared_weights,
   const torch::Tensor &topk_exp_id,
   const torch::Tensor &score_weight,
   const torch::Tensor &rms_end_w,
@@ -1075,6 +1140,7 @@ void warp_deepseek_r1_prepare_weights(
   ::o_proj_scals = o_proj_scals;
 
   ::shared_exp_id = shared_exp_id;
+  ::shared_weights = shared_weights;
   ::topk_exp_id = topk_exp_id;
   ::score_weight = score_weight;
 }
@@ -1090,11 +1156,11 @@ torch::Tensor warp_deepseek_r1_forward(
       auto xb = warp_deepseek_r1_latent_attn_f16(x, key_cache[l], val_cache[l], rms_att_ws[l], qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], pos);
       x = warp_x_add_allreduce_y_f16(x, xb);
       xb = warp_lnorm_f16(x, rms_ffn_ws[l], 1e-6f);
-      if (l < weight_gate_ups.size())
-        xb = warp_glu_expert_f16xf8_block_scal(xb, shared_exp_id, score_weight.narrow(0, 0, 1), weight_gate_ups[l], weight_gate_up_scals[l], weight_downs[l], weight_down_scals[l]);
-      else {
-        warp_deepseek_r1_static_gating_f16(xb.view({1, 1, -1}), gate_moes[l - 3], gate_biases[l - 3], score_weight.narrow(0, 1, score_weight.size(0) - 1).view({1, -1}), topk_exp_id.narrow(0, 1, topk_exp_id.size(0) - 1).view({1, -1}));
-        xb = warp_glu_expert_f16xf8_block_scal(xb.view({-1}), topk_exp_id.view({-1}), score_weight.view({-1}), moe_gate_up_ws[l - 3], moe_gate_up_ss[l - 3], moe_down_ws[l - 3], moe_down_ss[l - 3]);
+      if (l < weight_gate_ups.size()) {
+        xb = warp_glu_expert_f16xf8_block_scal(xb, shared_exp_id, shared_weights, weight_gate_ups[l], weight_gate_up_scals[l], weight_downs[l], weight_down_scals[l]);
+      } else {
+        warp_deepseek_r1_static_gating_f16(xb, gate_moes[l - 3], gate_biases[l - 3], score_weight, topk_exp_id);
+        xb = warp_glu_expert_f16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l - 3], moe_gate_up_ss[l - 3], moe_down_ws[l - 3], moe_down_ss[l - 3]);
       }
       x = warp_x_add_allreduce_y_f16(x, xb);
     }
@@ -1106,24 +1172,6 @@ void warp_bcast_index(const torch::Tensor &t, int64_t root) {
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
   auto stream = at::cuda::getCurrentCUDAStream();
   ncclBcast(t.data_ptr(), t.numel(), ncclInt64, root, (ncclComm_t)shared_nccl_comm, stream);
-}
-
-std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_top_8_static(
-     const torch::Tensor &sigmoid_score_f32,
-     const torch::Tensor &moe_gate_b_f32,
-     const ::std::optional<torch::Tensor> &top_v_out_,
-     const ::std::optional<torch::Tensor> &top_k_out_) {
-  CHECK_CUDA(sigmoid_score_f32);
-  AT_ASSERTM(sigmoid_score_f32.size(-1) == 256, "Deepseek R1 requires 256 experts for gating.");
-  int samples = sigmoid_score_f32.numel() / sigmoid_score_f32.size(-1);
-
-  auto device = sigmoid_score_f32.device();
-  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
-  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt64).device(device));
-  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt64, "Output tensor space should be float32 for top_scores and int64 for top_ids.");
-
-  antares::ops::call("deepseek_r1_top_k_f32", {sigmoid_score_f32.view({samples, -1}), moe_gate_b_f32.to(torch::kFloat32), top_v_out, top_k_out}, {}, false, 0, 3);
-  return {top_v_out, top_k_out};
 }
 
 torch::Tensor warp_rmsnorm_f16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps) {
@@ -1149,6 +1197,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
 
   m.def("deepseek_top_8_static", warp_deepseek_top_8_static);
+  m.def("deepseek_sigmoid_top_8_static", warp_deepseek_sigmoid_top_8_static);
   m.def("rmsnorm_bf16", warp_rmsnorm_f16);
 }
 #endif
