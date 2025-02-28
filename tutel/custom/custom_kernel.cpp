@@ -985,7 +985,6 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
   const torch::Tensor &data,
   const torch::Tensor &key_cache,
   const torch::Tensor &val_cache,
-  const torch::Tensor &rms_att_w,
   const torch::Tensor &qkv_a_proj,
   const torch::Tensor &qkv_a_proj_scal,
   const torch::Tensor &q_a_norm,
@@ -1000,9 +999,8 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
 ) {
     CHECK_CUDA(data);
     CHECK_EQ(data.dim(), 3);
-    auto x = data;
-    int batch = x.size(0), seqlen = x.size(1), n_heads = key_cache.size(-2);
-    auto xb = warp_lnorm_f16(x, rms_att_w, 1e-6f);
+    auto xb = data.to(torch::kFloat32);
+    int batch = xb.size(0), seqlen = xb.size(1), n_heads = key_cache.size(-2);
     auto qkv = warp_gemv_nt_fp16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
     auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
     auto k_pe_out = torch::empty_like(k_pe);
@@ -1027,11 +1025,11 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
     if (pos >= 63) {
       auto lm = torch::empty({2, n_heads, 64}, torch::TensorOptions().dtype(torch::kFloat32).device(query_states.device()));
       auto attn_output = antares::ops::call("self_attn_infer_f16", {query_states.squeeze(0).squeeze(0), key_states.squeeze(0), value_states.squeeze(0), lm}, {0.1352337788608801f});
-      x = torch::matmul(antares::ops::call("self_attn_reduce_f16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
+      xb = torch::matmul(antares::ops::call("self_attn_reduce_f16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
     } else {
-      x = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}), key_states.permute({0, 2, 1, 3}), value_states.permute({0, 2, 1, 3}), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
+      xb = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}), key_states.permute({0, 2, 1, 3}), value_states.permute({0, 2, 1, 3}), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
     }
-    return warp_gemv_nt_fp16xfp8_block_scal(x.view({batch, seqlen, -1}), o_proj, o_proj_scal);
+    return warp_gemv_nt_fp16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal).to(torch::kBFloat16);
 }
 
 torch::Tensor warp_glu_expert_f16xf8_block_scal(
@@ -1052,13 +1050,8 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
   CHECK_EQ(expert_ids.dim(), 2);
   CHECK_EQ(expert_weight.dim(), 2);
 
-  if (samples == 1) {
-    auto xb = antares::ops::call("gemv_silu_left_mul_right_bf16xf8", {x.view({samples, model_dim}), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s.view(torch::kInt64)}, {});
-    return antares::ops::call("gemv_sum_mul_weight_bf16xf8", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
-  }
-
-  auto xb = antares::ops::call("gemm_silu_left_mul_right_bf16xf8", {x.view({samples, model_dim}), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s.view(torch::kInt64)}, {});
-  return antares::ops::call("gemm_sum_mul_weight_bf16xf8", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
+  auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
+  return antares::ops::call("gemm_down_weight_sum_bf16xf8", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
 }
 
 namespace {
@@ -1171,8 +1164,8 @@ torch::Tensor warp_deepseek_r1_forward(
 
     #pragma unroll
     for (int l = 0; l < rms_att_ws.size(); ++l) {
-      auto xb = warp_deepseek_r1_latent_attn_f16(x.to(torch::kFloat32), key_cache[l], val_cache[l], rms_att_ws[l], qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], pos);
-      xb = xb.to(torch::kBFloat16);
+      auto xb = warp_rmsnorm_bf16(x, rms_att_ws[l], 1e-6f);
+      xb = warp_deepseek_r1_latent_attn_f16(xb, key_cache[l], val_cache[l], qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], pos);
 
       x = warp_x_add_allreduce_y_f16(x, xb);
       xb = warp_rmsnorm_bf16(x, rms_ffn_ws[l], 1e-6f);
