@@ -462,6 +462,13 @@ static torch::Tensor& nccl_stream_acquire(torch::Tensor &tensor, int idx) {
   return tensor;
 }
 
+void warp_bcast_index(const torch::Tensor &t, int64_t root) {
+  CHECK_CUDA(t);
+  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  ncclBcast(t.data_ptr(), t.numel(), t.dtype() == torch::kInt64 ? ncclInt64 : ncclBfloat16, root, (ncclComm_t)shared_nccl_comm, stream);
+}
+
 static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
   auto stream = at::cuda::getCurrentCUDAStream();
@@ -1054,9 +1061,13 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
   CHECK_EQ(expert_ids.dim(), 2);
   CHECK_EQ(expert_weight.dim(), 2);
 
-  auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
-  xb = antares::ops::call("gemm_down_weight_sum_bf16xf8", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
-  return xb;
+  if (samples < 32) {
+    auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
+    return antares::ops::call("gemm_down_weight_sum_bf16xf8_s", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
+  } else {
+    auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_m", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
+    return antares::ops::call("gemm_down_weight_sum_bf16xf8_m", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
+  }
 
 #if 0
   auto _ = antares::ops::call("to_float16_3d", {torch::index_select(moe_gate_up_w, 0, expert_ids.view({-1})), torch::index_select(moe_gate_up_s, 0, expert_ids.view({-1}))}, {});
@@ -1186,13 +1197,6 @@ torch::Tensor warp_deepseek_r1_forward(
       x = warp_x_add_allreduce_y_f16(x, xb);
     }
     return warp_rmsnorm_bf16(x, rms_end_w, 1e-6);
-}
-
-void warp_bcast_index(const torch::Tensor &t, int64_t root) {
-  CHECK_CUDA(t);
-  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
-  auto stream = at::cuda::getCurrentCUDAStream();
-  ncclBcast(t.data_ptr(), t.numel(), ncclInt64, root, (ncclComm_t)shared_nccl_comm, stream);
 }
 
 
