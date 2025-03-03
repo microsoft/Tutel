@@ -77,7 +77,7 @@ def record_time(is_cuda=None):
     if is_cuda:
         import torch
         torch.cuda.synchronize()
-    return time.time()
+    return time.perf_counter()
 
 def save(t, path):
     import numpy as np
@@ -89,6 +89,15 @@ def load(path, device=None):
     import torch
     npv = np.load(path)
     return torch.tensor(npv, device=device)
+
+def perform(fn, num_runs=100):
+    [fn() for _ in range(5)]
+    t0 = record_time()
+    [fn() for _ in range(num_runs)]
+    t1 = record_time()
+    cost = (t1 - t0) / num_runs
+    print('Function Latency = %.8lf sec\n' % cost)
+    return max(cost, 1e-6)
 
 def apply_rank_size_from_pattern(filename, rank, size, create_dir=True):
     if not re.search(r'\{rank\}', filename):

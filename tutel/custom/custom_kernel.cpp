@@ -992,6 +992,36 @@ void warp_deepseek_r1_static_gating_f16(
   warp_deepseek_sigmoid_top_8_static(logits_bf16.view({-1, logits_bf16.size(-1)}), gate_bias, top_v_out_, top_k_out_);
 }
 
+namespace {
+  torch::Tensor cos_sin;
+  torch::Tensor key_cache;
+  torch::Tensor val_cache;
+  std::vector<torch::Tensor> weight_gate_ups;
+  std::vector<torch::Tensor> weight_gate_up_scals;
+  std::vector<torch::Tensor> weight_downs;
+  std::vector<torch::Tensor> weight_down_scals;
+  std::vector<torch::Tensor> moe_gate_up_ws;
+  std::vector<torch::Tensor> moe_gate_up_ss;
+  std::vector<torch::Tensor> moe_down_ws;
+  std::vector<torch::Tensor> moe_down_ss;
+  std::vector<torch::Tensor> gate_moes;
+  std::vector<torch::Tensor> gate_biases;
+  std::vector<torch::Tensor> rms_att_ws;
+  std::vector<torch::Tensor> rms_ffn_ws;
+  std::vector<torch::Tensor> qkv_a_projs;
+  std::vector<torch::Tensor> qkv_a_proj_scals;
+  std::vector<torch::Tensor> q_a_norms;
+  std::vector<torch::Tensor> kv_a_norms;
+  std::vector<torch::Tensor> q_b_projs;
+  std::vector<torch::Tensor> q_b_proj_scals;
+  std::vector<torch::Tensor> kv_b_projs;
+  std::vector<torch::Tensor> kv_b_proj_scals;
+  std::vector<torch::Tensor> o_projs;
+  std::vector<torch::Tensor> o_proj_scals;
+  torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
+}
+
+
 torch::Tensor warp_deepseek_r1_latent_attn_f16(
   const torch::Tensor &data,
   const torch::Tensor &key_cache,
@@ -1015,13 +1045,16 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
     auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
     auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
     auto k_pe_out = torch::empty_like(k_pe);
-    antares::ops::call("rotary_emb_bf16", {k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
+    // antares::ops::call("rotary_emb_bf16", {k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
+    antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
+
     q = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
     kv = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
     auto query_states = q.view({batch, seqlen, -1, 192});
     auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
     auto q_pe_out = torch::empty_like(q_pe);
-    antares::ops::call("rotary_emb_bf16", {q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
+    // antares::ops::call("rotary_emb_bf16", {q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
+    antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
 
     antares::ops::call("cache_fill_bf16", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
                                       // [B,S,H,64]  [B,S,64]  [B,S,H,128:]    [B,H,128:]
@@ -1079,35 +1112,8 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
 #endif
 }
 
-namespace {
-  torch::Tensor key_cache;
-  torch::Tensor val_cache;
-  std::vector<torch::Tensor> weight_gate_ups;
-  std::vector<torch::Tensor> weight_gate_up_scals;
-  std::vector<torch::Tensor> weight_downs;
-  std::vector<torch::Tensor> weight_down_scals;
-  std::vector<torch::Tensor> moe_gate_up_ws;
-  std::vector<torch::Tensor> moe_gate_up_ss;
-  std::vector<torch::Tensor> moe_down_ws;
-  std::vector<torch::Tensor> moe_down_ss;
-  std::vector<torch::Tensor> gate_moes;
-  std::vector<torch::Tensor> gate_biases;
-  std::vector<torch::Tensor> rms_att_ws;
-  std::vector<torch::Tensor> rms_ffn_ws;
-  std::vector<torch::Tensor> qkv_a_projs;
-  std::vector<torch::Tensor> qkv_a_proj_scals;
-  std::vector<torch::Tensor> q_a_norms;
-  std::vector<torch::Tensor> kv_a_norms;
-  std::vector<torch::Tensor> q_b_projs;
-  std::vector<torch::Tensor> q_b_proj_scals;
-  std::vector<torch::Tensor> kv_b_projs;
-  std::vector<torch::Tensor> kv_b_proj_scals;
-  std::vector<torch::Tensor> o_projs;
-  std::vector<torch::Tensor> o_proj_scals;
-  torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
-}
-
 void warp_deepseek_r1_prepare_weights(
+  const torch::Tensor &cos_sin,
   const torch::Tensor &key_cache,
   const torch::Tensor &val_cache,
   const torch::Tensor &shared_exp_id,
@@ -1140,6 +1146,7 @@ void warp_deepseek_r1_prepare_weights(
   const std::vector<torch::Tensor> &gate_moes,
   const std::vector<torch::Tensor> &gate_biases
 ) {
+  ::cos_sin = cos_sin;
   ::key_cache = key_cache;
   ::val_cache = val_cache;
   ::weight_gate_ups = weight_gate_ups;
