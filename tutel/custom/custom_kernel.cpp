@@ -993,6 +993,8 @@ void warp_deepseek_r1_static_gating_f16(
 }
 
 namespace {
+  int64_t n_local_heads;
+  torch::Tensor token_emb, weight_classify;
   torch::Tensor cos_sin;
   torch::Tensor key_cache;
   torch::Tensor val_cache;
@@ -1041,20 +1043,19 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
     CHECK_CUDA(data);
     CHECK_EQ(data.dim(), 3);
     auto xb = data;
-    int batch = xb.size(0), seqlen = xb.size(1), n_heads = key_cache.size(-2);
+    int batch = xb.size(0), seqlen = xb.size(1), n_heads = n_local_heads;
     auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
     auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
     auto k_pe_out = torch::empty_like(k_pe);
-    // antares::ops::call("rotary_emb_bf16", {k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
     antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
 
     q = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
-    kv = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
     auto query_states = q.view({batch, seqlen, -1, 192});
     auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
     auto q_pe_out = torch::empty_like(q_pe);
-    // antares::ops::call("rotary_emb_bf16", {q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {9.210340372f, pos}, false, 0, 1);
     antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
+#if 1
+    kv = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
 
     antares::ops::call("cache_fill_bf16", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
                                       // [B,S,H,64]  [B,S,64]  [B,S,H,128:]    [B,H,128:]
@@ -1073,6 +1074,7 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
     } else {
       xb = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), key_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), value_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
     }
+#endif
     return warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
 }
 
@@ -1113,6 +1115,9 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
 }
 
 void warp_deepseek_r1_prepare_weights(
+  int64_t n_local_heads,
+  const torch::Tensor &token_emb,
+  const torch::Tensor &weight_classify,
   const torch::Tensor &cos_sin,
   const torch::Tensor &key_cache,
   const torch::Tensor &val_cache,
@@ -1146,9 +1151,13 @@ void warp_deepseek_r1_prepare_weights(
   const std::vector<torch::Tensor> &gate_moes,
   const std::vector<torch::Tensor> &gate_biases
 ) {
+  ::n_local_heads = n_local_heads,
+  ::token_emb = token_emb,
+  ::weight_classify = weight_classify,
   ::cos_sin = cos_sin;
   ::key_cache = key_cache;
   ::val_cache = val_cache;
+
   ::weight_gate_ups = weight_gate_ups;
   ::weight_gate_ups = weight_gate_ups;
   ::weight_gate_up_scals = weight_gate_up_scals;
@@ -1186,8 +1195,9 @@ torch::Tensor warp_deepseek_r1_forward(
 ) {
     auto x = data;
     CHECK_CUDA(x);
-    CHECK_EQ(x.dtype(), torch::kBFloat16);
+    CHECK_EQ(x.dim(), 2);
 
+    x = token_emb.index_select(0, x.view({-1})).view({x.size(0), x.size(1), token_emb.size(1)});
     #pragma unroll
     for (int l = 0; l < rms_att_ws.size(); ++l) {
       auto xb = warp_rmsnorm_bf16(x, rms_att_ws[l], 1e-6f);
@@ -1206,7 +1216,8 @@ torch::Tensor warp_deepseek_r1_forward(
       }
       x = warp_x_add_allreduce_y_f16(x, xb);
     }
-    return warp_rmsnorm_bf16(x, rms_end_w, 1e-6);
+    x = warp_rmsnorm_bf16(x, rms_end_w, 1e-6);
+    return torch::matmul(x, weight_classify.t());
 }
 
 
