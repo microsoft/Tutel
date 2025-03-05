@@ -949,9 +949,13 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const tor
   return torch::matmul(x.view({samples, x.size(2)}), w_.t()).view({x.size(0), x.size(1), w.size(0)});
 }
 
-torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps) {
+torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps, const ::std::optional<torch::Tensor> &out = ::std::nullopt) {
   CHECK_CUDA(x);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
+  if (out.has_value()) {
+    antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}), rms_w, out.value().view({-1, x.size(-1)})}, {eps}, false, 0, 2);
+    return out.value();
+  }
   return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}), rms_w}, {eps}).view(x.sizes());
 }
 
@@ -1040,21 +1044,22 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
   const torch::Tensor &o_proj_scal,
   int64_t pos
 ) {
-    CHECK_CUDA(data);
-    CHECK_EQ(data.dim(), 3);
-    auto xb = data;
-    int batch = xb.size(0), seqlen = xb.size(1), n_heads = n_local_heads;
-    auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
-    auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
-    auto k_pe_out = torch::empty_like(k_pe);
-    antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
+  CHECK_CUDA(data);
+  CHECK_EQ(data.dim(), 3);
+  auto xb = data;
+  int batch = xb.size(0), seqlen = xb.size(1), n_heads = n_local_heads;
+  auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
+  auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
+  auto k_pe_out = torch::empty_like(k_pe);
+  antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
 
-    q = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
-    auto query_states = q.view({batch, seqlen, -1, 192});
-    auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
-    auto q_pe_out = torch::empty_like(q_pe);
-    antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
-#if 1
+  q = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
+  auto query_states = q.view({batch, seqlen, -1, 192});
+  auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
+  auto q_pe_out = torch::empty_like(q_pe);
+  antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
+
+  if (val_cache.numel() > 1) {
     kv = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
 
     antares::ops::call("cache_fill_bf16", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
@@ -1066,16 +1071,37 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
     auto key_states = key_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 192});
     auto value_states = val_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 128});
     query_states = query_states.permute({1, 0, 2, 3}).view({1, seqlen, -1, 192});
+    CHECK_EQ(query_states.size(1), 1);
 
-    if (pos >= 63) {
-      auto lm = torch::empty({2, batch * n_heads, 64}, torch::TensorOptions().dtype(torch::kBFloat16).device(query_states.device()));
-      auto attn_output = antares::ops::call("self_attn_infer_bf16", {query_states.squeeze(0).squeeze(0), key_states.squeeze(0), value_states.squeeze(0), lm}, {0.1352337788608801f});
-      xb = torch::matmul(antares::ops::call("self_attn_reduce_bf16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
-    } else {
-      xb = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), key_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), value_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
+    auto lm = torch::empty({2, batch * n_heads, 64}, torch::TensorOptions().dtype(torch::kBFloat16).device(query_states.device()));
+    auto attn_output = antares::ops::call("self_attn_infer_bf16", {query_states.squeeze(0).squeeze(0), key_states.squeeze(0), value_states.squeeze(0), lm}, {0.1352337788608801f});
+    xb = torch::matmul(antares::ops::call("self_attn_reduce_bf16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
+
+    // xb = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), key_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), value_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
+  } else {
+    kv = warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f); // [B, S, 512]
+    key_cache.narrow(0, pos, seqlen).narrow(1, 0, batch) = torch::cat({kv, k_pe_out}, -1).permute({1, 0, 2}); // [S, B, 512 + 64]
+
+    static std::unordered_map<void*, torch::Tensor> wkv_b_;
+    auto it = wkv_b_.find(kv_b_proj_scal.data_ptr());
+    if (it == wkv_b_.end()) {
+      wkv_b_[kv_b_proj_scal.data_ptr()] = antares::ops::call("to_bfloat16_3d", {kv_b_proj.unsqueeze(0), kv_b_proj_scal.unsqueeze(0)}, {}).
+        view({n_heads, 2, -1, kv_b_proj.size(-1)}).permute({1, 0, 2, 3}).contiguous(); // 2, H, 128, 512
+      it = wkv_b_.find(kv_b_proj_scal.data_ptr());
     }
-#endif
-    return warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
+    auto _0 = it->second.select(0, 0), _1 = it->second.select(0, 1); // H, D(128), C(512)
+    // k_pe_out, q_pe_out -- 1, 1, 64 | 1, 1, 16, 64
+    auto q_nope = query_states.narrow(-1, 0, 128).contiguous(); // B, S, H, D
+    q_nope = at::einsum("bshd,hdc->bshc", {q_nope, _0}).contiguous(); // B, S, H, C(512)
+
+    auto R = key_cache.narrow(0, 0, pos + seqlen); // S2, B, (512 + 64)
+    auto scores_ = at::einsum("bshc,tbc->bsht", {torch::cat({q_nope, q_pe_out}, -1), R}) * 0.1352337788608801f;
+    _0 = at::einsum("bsht,tbc->bshc", {at::softmax(scores_, -1), R});
+    _0 = _0.narrow(-1, 0, 512);
+
+    xb = at::einsum("bshc,hdc->bshd", {_0, _1}).contiguous();
+  }
+  return warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
 }
 
 torch::Tensor warp_glu_expert_f16xf8_block_scal(
@@ -1096,31 +1122,25 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
   CHECK_EQ(expert_ids.dim(), 2);
   CHECK_EQ(expert_weight.dim(), 2);
 
-  if (samples < 32) {
+  if (samples < 4) {
     auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
     return antares::ops::call("gemm_down_weight_sum_bf16xf8_s", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
-  } else {
+  } else if (samples < 32) {
     auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_m", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
     return antares::ops::call("gemm_down_weight_sum_bf16xf8_m", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
+  } else {
+    auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_l", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {});
+    return antares::ops::call("gemm_down_weight_sum_bf16xf8_l", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
   }
-
-#if 0
-  auto _ = antares::ops::call("to_float16_3d", {torch::index_select(moe_gate_up_w, 0, expert_ids.view({-1})), torch::index_select(moe_gate_up_s, 0, expert_ids.view({-1}))}, {});
-  _ = at::einsum("bk,emk->bem", {x.view({samples, model_dim}).to(torch::kFloat32), _.to(torch::kFloat32)});
-  auto L = at::silu(_.narrow(-1, 0, _.size(-1) / 2)), R = _.narrow(-1, _.size(-1) / 2, _.size(-1) / 2);
-  _ = antares::ops::call("to_float16_3d", {torch::index_select(moe_down_w, 0, expert_ids.view({-1})), torch::index_select(moe_down_s, 0, expert_ids.view({-1}))}, {});
-  _ = at::einsum("bem,ekm,e->bk", {L * R, _.to(torch::kFloat32), expert_weight.view({-1})}).to(torch::kBFloat16);
-  return _;
-#endif
 }
 
 void warp_deepseek_r1_prepare_weights(
   int64_t n_local_heads,
+  int64_t max_seq_len,
+  int64_t batch,
   const torch::Tensor &token_emb,
   const torch::Tensor &weight_classify,
   const torch::Tensor &cos_sin,
-  const torch::Tensor &key_cache,
-  const torch::Tensor &val_cache,
   const torch::Tensor &shared_exp_id,
   const torch::Tensor &shared_weights,
   const torch::Tensor &topk_exp_id,
@@ -1155,8 +1175,18 @@ void warp_deepseek_r1_prepare_weights(
   ::token_emb = token_emb,
   ::weight_classify = weight_classify,
   ::cos_sin = cos_sin;
-  ::key_cache = key_cache;
-  ::val_cache = val_cache;
+
+  int n_layers = o_projs.size();
+  if (!getenv("LORA") || std::atoi(getenv("LORA")) == 1) {
+    // kv_lora_rank + qk_rope_head_dim
+    ::key_cache = torch::zeros({n_layers, max_seq_len, batch, 512 + 64}, torch::TensorOptions().dtype(token_emb.dtype()).device(token_emb.device()));
+    ::val_cache = torch::empty({n_layers}, torch::TensorOptions().dtype(token_emb.dtype()).device(token_emb.device()));
+  } else {
+    // qk_nope_head_dim + qk_rope_head_dim
+    ::key_cache = torch::zeros({n_layers, max_seq_len, batch, n_local_heads, 128 + 64}, torch::TensorOptions().dtype(token_emb.dtype()).device(token_emb.device()));
+    // v_head_dim
+    ::val_cache = torch::zeros({n_layers, max_seq_len, batch, n_local_heads, 128}, torch::TensorOptions().dtype(token_emb.dtype()).device(token_emb.device()));
+  }
 
   ::weight_gate_ups = weight_gate_ups;
   ::weight_gate_ups = weight_gate_ups;
