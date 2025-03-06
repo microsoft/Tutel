@@ -1177,7 +1177,7 @@ void warp_deepseek_r1_prepare_weights(
   ::cos_sin = cos_sin;
 
   int n_layers = o_projs.size();
-  if (!getenv("LORA") || std::atoi(getenv("LORA")) == 1) {
+  if (getenv("LORA") && std::atoi(getenv("LORA")) == 1) {
     // kv_lora_rank + qk_rope_head_dim
     ::key_cache = torch::zeros({n_layers, max_seq_len, batch, 512 + 64}, torch::TensorOptions().dtype(token_emb.dtype()).device(token_emb.device()));
     ::val_cache = torch::empty({n_layers}, torch::TensorOptions().dtype(token_emb.dtype()).device(token_emb.device()));
@@ -1226,6 +1226,7 @@ torch::Tensor warp_deepseek_r1_forward(
     auto x = data;
     CHECK_CUDA(x);
     CHECK_EQ(x.dim(), 2);
+    int n_samples = x.numel();
 
     x = token_emb.index_select(0, x.view({-1})).view({x.size(0), x.size(1), token_emb.size(1)});
     #pragma unroll
@@ -1239,8 +1240,8 @@ torch::Tensor warp_deepseek_r1_forward(
         xb = warp_glu_expert_f16xf8_block_scal(xb, shared_exp_id, shared_weights, weight_gate_ups[l], weight_gate_up_scals[l], weight_downs[l], weight_down_scals[l]);
       } else {
         CHECK_EQ(topk_exp_id.dim(), 2);
-        auto logits_bf16 = torch::matmul(xb, gate_moes[l - 3].t());
-        antares::ops::call("deepseek_r1_sigmoid_top_k_routed_scaled_f32", {logits_bf16.view({-1, logits_bf16.size(-1)}), gate_biases[l - 3], score_weight, topk_exp_id}, {}, false, 0, 3);
+        auto logits_bf16 = antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({n_samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {});
+        antares::ops::call("deepseek_r1_sigmoid_top_k_routed_scaled_f32", {logits_bf16.view({n_samples, logits_bf16.size(-1)}), gate_biases[l - 3], score_weight, topk_exp_id}, {}, false, 0, 3);
 
         xb = warp_glu_expert_f16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l - 3], moe_gate_up_ss[l - 3], moe_down_ws[l - 3], moe_down_ss[l - 3]);
       }
