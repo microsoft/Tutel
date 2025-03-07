@@ -332,7 +332,7 @@ static int g_world_size = 0, shared_world_size = 0;
 static int g_world_rank = 0, shared_world_rank = 0;
 static int g_local_size = 0;
 static int g_local_rank = 0;
-static int __dtype_size[256];
+static int __dtype_size[256 * 256];
 
 // jit
 static int mem_stride_copy_char_fd = -1;
@@ -369,6 +369,7 @@ static void init_shared_nccl(
   shared_world_size = world_size;
   shared_world_rank = world_rank;
 
+  static_assert(sizeof(nccl_unique_id_tensor.dtype()) <= 2);
   __dtype_size[(int)torch::kFloat64] = 8;
   __dtype_size[(int)torch::kInt64] = 8;
   __dtype_size[(int)torch::kFloat32] = 4;
@@ -462,11 +463,27 @@ static torch::Tensor& nccl_stream_acquire(torch::Tensor &tensor, int idx) {
   return tensor;
 }
 
-void warp_bcast_index(const torch::Tensor &t, int64_t root) {
+void warp_nccl_bcast(const torch::Tensor &t, int64_t root) {
   CHECK_CUDA(t);
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
   auto stream = at::cuda::getCurrentCUDAStream();
-  ncclBcast(t.data_ptr(), t.numel(), t.dtype() == torch::kInt64 ? ncclInt64 : ncclBfloat16, root, (ncclComm_t)shared_nccl_comm, stream);
+  auto dtype = t.dtype();
+  int dtype_size = __dtype_size[*(unsigned short*)&dtype];
+  ncclBcast(t.data_ptr(), t.numel() * dtype_size, ncclInt8, root, (ncclComm_t)shared_nccl_comm, stream);
+}
+
+void warp_nccl_all_reduce(const torch::Tensor &t, const torch::Tensor &out) {
+  CHECK_CUDA(t);
+  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
+  auto stream = at::cuda::getCurrentCUDAStream();
+  ncclDataType_t ncclType;
+  if (t.dtype() == torch::kBFloat16)
+    ncclType = ncclBfloat16;
+  else if (t.dtype() == torch::kFloat16)
+    ncclType = ncclFloat16;
+  else
+      AT_ASSERTM(0, "Unrecognized data type for Nccl AllReduce.");
+  ncclAllReduce(t.data_ptr(), out.data_ptr(), t.numel(), ncclType, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
 }
 
 static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
@@ -1104,6 +1121,35 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
   return warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
 }
 
+torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16(
+  const torch::Tensor &x,
+  const torch::Tensor &expert_ids,
+  const torch::Tensor &expert_weight,
+  const torch::Tensor &moe_gate_up_w,
+  const torch::Tensor &moe_gate_up_s,
+  const torch::Tensor &moe_down_w,
+  const torch::Tensor &moe_down_s) {
+
+  int model_dim = x.size(-1);
+  int samples = x.numel() / model_dim;
+
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(x.dim(), 3);
+  CHECK_EQ(expert_ids.dim(), 2);
+  CHECK_EQ(expert_weight.dim(), 2);
+  CHECK_EQ(moe_gate_up_w.dim(), 5); // shape = [256, 32, 448, 16, 16]
+  CHECK_EQ(moe_gate_up_w.size(-2), 16);
+  CHECK_EQ(moe_gate_up_w.size(-1), 16);
+  CHECK_EQ(moe_gate_up_s.dim(), 3); // shape = [256, 4, 56]
+  CHECK_EQ(moe_down_w.dim(), 3);
+  CHECK_EQ(moe_down_s.dim(), 3);
+
+  auto _ = moe_gate_up_w.view({moe_gate_up_w.size(0), moe_gate_up_w.size(1) * moe_gate_up_w.size(3), moe_gate_up_w.size(2) * moe_gate_up_w.size(4)});
+  auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s_16x16", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), _, moe_gate_up_s}, {});
+  return antares::ops::call("gemm_down_weight_sum_bf16xf8_s", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
+}
+
 torch::Tensor warp_glu_expert_f16xf8_block_scal(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
@@ -1258,7 +1304,9 @@ TORCH_LIBRARY(tutel_ops, m) {
 
   m.def("gemm_nt_bf16xfp8_block_scal", warp_gemm_nt_bf16xfp8_block_scal);
 
-  m.def("bcast_index", &warp_bcast_index);
+  m.def("bcast_index", &warp_nccl_bcast);
+  m.def("nccl_bcast", &warp_nccl_bcast);
+  m.def("nccl_all_reduce", &warp_nccl_all_reduce);
   m.def("x_add_allreduce_y_f16", &warp_x_add_allreduce_y_f16);
   m.def("deepseek_r1_static_gating_f16", warp_deepseek_r1_static_gating_f16);
   m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_latent_attn_f16);
@@ -1268,5 +1316,6 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("deepseek_sigmoid_top_8_static", warp_deepseek_sigmoid_top_8_static);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
+  m.def("glu_expert_bf16xf8_block_scal_16x16", warp_glu_expert_f16xf8_block_scal_16x16);
 }
 #endif
