@@ -489,8 +489,10 @@ static void batch_all_to_all_v(const std::vector<torch::Tensor> &ins, const std:
 
     unsigned long long in_offset = 0, out_offset = 0;
     for (int i = 0; i < shared_world_size; ++i) {
-      ncclSend((char*)in_buff + in_offset, in_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
-      ncclRecv((char*)out_buff + out_offset, out_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
+      if(in_sizes[i])  // only send if partition is non-empty
+          ncclSend((char*)in_buff + in_offset, in_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
+      if(out_sizes[i]) // only receive if partition is non-empty
+          ncclRecv((char*)out_buff + out_offset, out_sizes[i] * size, ncclInt8, i, (ncclComm_t)shared_nccl_comm, stream);
       in_offset += in_sizes[i] * size;
       out_offset += out_sizes[i] * size;
     }
