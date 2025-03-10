@@ -181,7 +181,7 @@ at::Tensor call(const void *key, const std::vector<at::Tensor> &ts, const std::v
       static std::unordered_map<std::string, decltype(torch::kInt8)> key_to_dtype = {
         {"int8", torch::kInt8}, {"int16", torch::kInt16}, {"int32", torch::kInt32}, {"int64", torch::kInt64},
         {"bfloat8", at::kFloat8_e5m2}, {"float8", at::kFloat8_e4m3fn}, {"bfloat16", torch::kBFloat16}, {"float16", torch::kFloat16}, {"float32", torch::kFloat32}, {"float64", torch::kFloat64},
-        {"bfloat2x16", at::kComplexHalf}, {"float2x16", at::kComplexHalf}, {"float2x32", at::kComplexFloat},
+        {"bfloat2x16", torch::kInt32}, {"float2x16", torch::kInt32}, {"float2x32", torch::kInt64},
       };
 
       auto dtype_it = key_to_dtype.find(o_type[1]);

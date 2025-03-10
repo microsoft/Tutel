@@ -957,9 +957,12 @@ torch::Tensor warp_to_bfloat16(const torch::Tensor &w, const torch::Tensor &scal
   if (w_.dim() < 3)
     w_ = w_.unsqueeze(0), scal_ = scal_.unsqueeze(0);
   CHECK_EQ(w_.dim(), 3);
-  if (scal_.dim() + 1 == w_.dim())
-    w_ = (w_.to(torch::kFloat32) * scal_.unsqueeze(-1)).to(torch::kBFloat16);
-  else {
+  if (scal_.dim() + 1 == w_.dim()) {
+    if (w_.size(-1) != scal_.size(-1))
+      w_ = (w_.to(torch::kFloat32) * scal_.unsqueeze(-1)).to(torch::kBFloat16);
+    else
+      w_ = (w_.to(torch::kFloat32) * scal_.unsqueeze(-2)).to(torch::kBFloat16);
+  } else {
     CHECK_EQ(scal_.dim(), 3);
     w_ = antares::ops::call("to_bfloat16_3d", {w_, scal_}, {});
   }
@@ -1154,6 +1157,35 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
   return xb;
 }
 
+torch::Tensor warp_shared_expert_f16xf8(
+  const torch::Tensor &x,
+  const torch::Tensor &moe_gate_up_w,
+  const torch::Tensor &moe_gate_up_s,
+  const torch::Tensor &moe_down_w,
+  const torch::Tensor &moe_down_s
+) {
+    int model_dim = x.size(-1);
+    int samples = x.numel() / model_dim;
+
+    CHECK_EQ(moe_gate_up_s.size(0), 1);
+
+    static std::unordered_map<void*, torch::Tensor> shared_gate_up, shared_down;
+    auto it = shared_gate_up.find(moe_gate_up_s.data_ptr());
+    if (it == shared_gate_up.end()) {
+      shared_gate_up[moe_gate_up_s.data_ptr()] = warp_to_bfloat16(moe_gate_up_w, moe_gate_up_s).squeeze(0);
+      it = shared_gate_up.find(moe_gate_up_s.data_ptr());
+    }
+    auto xb = torch::matmul(x, it->second.t());
+    it = shared_down.find(moe_down_s.data_ptr());
+    if (it == shared_down.end()) {
+      shared_down[moe_down_s.data_ptr()] = warp_to_bfloat16(moe_down_w, moe_down_s).squeeze(0);
+      it = shared_down.find(moe_down_s.data_ptr());
+    }
+    xb = antares::ops::call("fused_silu_mul_bf16", {xb.view({samples, 2, xb.size(-1) / 2})}, {}).view({xb.size(0), xb.size(1), -1});
+    xb = torch::matmul(xb, it->second.t());
+    return xb.view({x.size(0), x.size(1), moe_down_w.size(1)});
+}
+
 torch::Tensor warp_glu_expert_f16xf8_block_scal(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
@@ -1172,38 +1204,21 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal(
   CHECK_EQ(expert_ids.dim(), 2);
   CHECK_EQ(expert_weight.dim(), 2);
 
-  if (samples >= 4 && moe_gate_up_w.size(0) == 1) {
-    CHECK_EQ(moe_gate_up_s.dim(), 3);
-    CHECK_EQ(moe_down_s.dim(), 3);
-
-    static std::unordered_map<void*, torch::Tensor> shared_gate_up, shared_down;
-    auto it = shared_gate_up.find(moe_gate_up_s.data_ptr());
-    if (it == shared_gate_up.end()) {
-      shared_gate_up[moe_gate_up_s.data_ptr()] = warp_to_bfloat16(moe_gate_up_w, moe_gate_up_s).squeeze(0);
-      it = shared_gate_up.find(moe_gate_up_s.data_ptr());
-    }
-    auto xb = torch::matmul(x, it->second.t());
-    it = shared_down.find(moe_down_s.data_ptr());
-    if (it == shared_down.end()) {
-      shared_down[moe_down_s.data_ptr()] = warp_to_bfloat16(moe_down_w, moe_down_s).squeeze(0);
-      it = shared_down.find(moe_down_s.data_ptr());
-    }
-    xb = antares::ops::call("fused_silu_mul_bf16", {xb.view({samples, 2, xb.size(-1) / 2})}, {}).view({xb.size(0), xb.size(1), -1});
-    xb = torch::matmul(xb, it->second.t());
-    return xb.view({x.size(0), x.size(1), moe_down_w.size(1)});
-  }
+  if (samples >= 4 && moe_gate_up_w.size(0) == 1)
+    return warp_shared_expert_f16xf8(x, moe_gate_up_w, moe_gate_up_s, moe_down_w, moe_down_s);
 
   if (moe_down_s.dim() == 2) {
     if (samples >= 4) {
       AT_ASSERTM(shared_world_size == 8, "Branch designed for 8 GPUs.");
 
-      auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_static_l", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids.view({-1}), moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {}).view({expert_ids.size(0) * expert_ids.size(1), 2, -1});
-      xb = antares::ops::call("gemm_conv_static_l", {xb.view(torch::kInt32), expert_weight.view({-1})}, {}).view({expert_ids.size(0), expert_ids.size(1), -1});
-      xb = antares::ops::call("gemm_down_weight_sum_bf16xf8_static_l_post_conv", {xb.view(torch::kInt32), expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {});
+      auto out = warp_shared_expert_f16xf8(x, moe_gate_up_w.narrow(0, -1, 1), moe_gate_up_s.narrow(0, -1, 1), moe_down_w.narrow(0, -1, 1), moe_down_s.narrow(0, -1, 1));
+      auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_static_stage_1", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {}).view({expert_ids.size(0), 8, 2, moe_gate_up_w.size(-2) / 2});
+      xb = antares::ops::call("gemm_moe_mul_static_stage_2", {xb.view(torch::kInt32), expert_weight, expert_ids, moe_down_s.view(torch::kInt64)}, {}).view({expert_ids.size(0), 8, xb.size(-1) / 2});
+      xb = antares::ops::call("gemm_down_weight_sum_bf16xf8_static_stage_3", {xb.view(torch::kInt32), out.view({samples, out.size(-1)}), expert_ids, moe_down_w.view(torch::kInt16)}, {});
       return xb.view({x.size(0), x.size(1), moe_down_w.size(1)});
     } else {
       auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_static", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids.view({-1}), moe_gate_up_w.view(torch::kInt16), moe_gate_up_s}, {}).view({expert_ids.size(0), expert_ids.size(1), moe_gate_up_w.size(1)});
-      xb = antares::ops::call("gemm_down_weight_sum_bf16xf8_static", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s}, {});
+      xb = antares::ops::call("gemm_down_weight_sum_bf16xf8_static", {xb.view(xb.dtype() == torch::kFloat32 ? torch::kInt64 : torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_s.view(torch::kInt64)}, {});
       return xb.view({x.size(0), x.size(1), moe_down_w.size(1)});
     }
   }
