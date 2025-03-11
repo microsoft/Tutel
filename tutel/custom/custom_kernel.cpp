@@ -1383,17 +1383,19 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16(
 
   CHECK_EQ(moe_gate_up_w.dim(), 5); // shape = [256, 32, 448, 16, 16]
   CHECK_EQ(moe_gate_up_s.dim(), 3); // shape = [256, 4, 56]
+  CHECK_EQ(moe_gate_up_w.size(2), 448);
   CHECK_EQ(moe_gate_up_w.size(-2), 16);
   CHECK_EQ(moe_gate_up_w.size(-1), 16);
 
   CHECK_EQ(moe_down_w.dim(), 5); // shape = [256, 448, 16, 16, 16]
   CHECK_EQ(moe_down_s.dim(), 3); // shape = [256, 56, 2]
+  CHECK_EQ(moe_down_w.size(1), 448);
   CHECK_EQ(moe_down_w.size(-2), 16);
   CHECK_EQ(moe_down_w.size(-1), 16);
 
   auto _0 = moe_gate_up_w.view({moe_gate_up_w.size(0), moe_gate_up_w.size(1) * moe_gate_up_w.size(3), moe_gate_up_w.size(2) * moe_gate_up_w.size(4)});
   auto _1 = moe_down_w.view({moe_down_w.size(0), moe_down_w.size(1) * moe_down_w.size(3), moe_down_w.size(2) * moe_down_w.size(4)});
-  auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s_16x16", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), _0, moe_gate_up_s}, {});
+  auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s_16x16", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_w.view(_0.sizes()).view(torch::kInt16), moe_gate_up_s}, {});
   return antares::ops::call("gemm_down_weight_sum_bf16xf8_s_16x16", {xb.view(torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_w.view(_1.sizes()).view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), _1.size(1)});
 }
 
