@@ -486,6 +486,29 @@ void warp_nccl_all_reduce(const torch::Tensor &t, const torch::Tensor &out) {
   ncclAllReduce(t.data_ptr(), out.data_ptr(), t.numel(), ncclType, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
 }
 
+static void warp_test_allreduce_bf16(int64_t bf16_count) {
+  static torch::Tensor w;
+  static void* dptr;
+  if (w.numel() == 0) {
+    w = torch::randn({bf16_count}, torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA));
+    dptr = w.data_ptr();
+  }
+
+  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+  int steps = 100;
+  void *h1, *h2;
+
+  if (shared_world_rank == 0)
+    h1 = ab::recordTime(stream);
+  for (int i = 0; i < steps; ++i)
+    ncclAllReduce(dptr, dptr, bf16_count, ncclBfloat16, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
+  if (shared_world_rank == 0) {
+    h2 = ab::recordTime(stream);
+    printf("Latency for All Reduce BF16 (size = %d x %d) = %g\n", int(bf16_count), 2, ab::convertToElapsedTime(h1, h2) / steps);
+  }
+}
+
 static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
   CHECK_EQ(t.dtype(), torch::kBFloat16);
@@ -1405,6 +1428,7 @@ TORCH_LIBRARY(tutel_ops, m) {
 
   m.def("gemm_nt_bf16xfp8_block_scal", warp_gemm_nt_bf16xfp8_block_scal);
 
+  m.def("test_allreduce_bf16", &warp_test_allreduce_bf16);
   m.def("bcast_index", &warp_nccl_bcast);
   m.def("nccl_bcast", &warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
