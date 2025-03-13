@@ -1037,7 +1037,7 @@ torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms
   return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}), rms_w}, {eps}).view(x.sizes());
 }
 
-std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static(
+std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
      const torch::Tensor &logits_bf16,
      const torch::Tensor &moe_gate_b_bf16,
      const ::std::optional<torch::Tensor> &top_v_out_,
@@ -1055,24 +1055,10 @@ std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static(
   auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt32).device(device));
   AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt32, "Output tensor space should be float32 for top_scores and int32 for top_ids.");
 
-  antares::ops::call("deepseek_r1_sigmoid_top_k_f32", {logits_bf16.view({samples, n_experts}), moe_gate_b_bf16, top_v_out, top_k_out}, {}, false, 0, 3);
+  antares::ops::call("deepseek_r1_sigmoid_top_k_routed_scaled_f32", {logits_bf16.view({samples, n_experts}), moe_gate_b_bf16, top_v_out, top_k_out}, {}, false, 0, 3);
   return {top_v_out, top_k_out};
 }
 
-void warp_deepseek_r1_static_gating_f16(
-     const torch::Tensor &x,
-     const torch::Tensor &gate_moe,
-     const torch::Tensor &gate_bias,
-     const ::std::optional<torch::Tensor> &top_v_out_,
-     const ::std::optional<torch::Tensor> &top_k_out_) {
-  CHECK_CUDA(x);
-  CHECK_EQ(x.dtype(), torch::kBFloat16);
-  CHECK_EQ(gate_moe.dtype(), torch::kBFloat16);
-  CHECK_EQ(gate_bias.dtype(), torch::kBFloat16);
-
-  auto logits_bf16 = torch::matmul(x, gate_moe.t());
-  warp_deepseek_sigmoid_top_8_static(logits_bf16.view({-1, logits_bf16.size(-1)}), gate_bias, top_v_out_, top_k_out_);
-}
 
 namespace {
   int64_t n_local_heads;
@@ -1127,7 +1113,7 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
   auto xb = data;
   int batch = xb.size(0), seqlen = xb.size(1), n_heads = n_local_heads;
 
-  auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, *]
+  auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, 1536 + 512 + 64]
   auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
   auto k_pe_out = torch::empty_like(k_pe);
   antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
@@ -1177,7 +1163,6 @@ torch::Tensor warp_deepseek_r1_latent_attn_f16(
     auto scores_ = at::einsum("bshc,tbc->bsht", {torch::cat({q_nope, q_pe_out}, -1), R}) * 0.1352337788608801f;
     _0 = at::einsum("bsht,tbc->bshc", {at::softmax(scores_, -1), R});
     _0 = _0.narrow(-1, 0, 512).contiguous();
-
     xb = at::einsum("bshc,hdc->bshd", {_0, _1}).contiguous();
   }
   xb = warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
@@ -1433,12 +1418,11 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("nccl_bcast", &warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
   m.def("x_add_allreduce_y_f16", &warp_x_add_allreduce_y_f16);
-  m.def("deepseek_r1_static_gating_f16", warp_deepseek_r1_static_gating_f16);
   m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_latent_attn_f16);
   m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
 
-  m.def("deepseek_sigmoid_top_8_static", warp_deepseek_sigmoid_top_8_static);
+  m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
   m.def("to_bfloat16", warp_to_bfloat16);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
