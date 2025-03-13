@@ -1371,7 +1371,7 @@ torch::Tensor warp_deepseek_r1_forward(
     return torch::matmul(x, weight_classify.t());
 }
 
-torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16(
+torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16_fnuz(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
   const torch::Tensor &expert_weight,
@@ -1427,6 +1427,6 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("to_bfloat16", warp_to_bfloat16);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
 
-  m.def("glu_expert_bf16xf8_block_scal_16x16", warp_glu_expert_f16xf8_block_scal_16x16);
+  m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_f16xf8_block_scal_16x16_fnuz);
 }
 #endif
