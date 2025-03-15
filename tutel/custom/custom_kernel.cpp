@@ -959,6 +959,19 @@ torch::Tensor warp_sparse_bmm_infer(const torch::Tensor &x, const torch::Tensor 
   return y;
 }
 
+template<class FN>
+void perform(FN func, int num_runs = 1000) {
+  for (int _ = 0; _ < 5; ++_)
+    func();
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+  puts("=======================");
+  void *h1 = ab::recordTime(stream);
+  for (int _ = 0; _ < num_runs; ++_)
+    func();
+  void *h2 = ab::recordTime(stream);
+  printf("Perform: %g\n", ab::convertToElapsedTime(h1, h2) / num_runs);
+}
+
 void show(const std::vector<torch::Tensor> &xs) {
   if (shared_world_rank != 0)
     return;
@@ -1006,6 +1019,9 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const tor
 
   int samples = x.size(0) * x.size(1);
 
+  if (w.dtype() == torch::kBFloat16)
+    return torch::matmul(x.view({samples, x.size(2)}), w.t()).view({x.size(0), x.size(1), w.size(0)});
+
   if (samples < 4)
     return antares::ops::call("gemv_nt_bf16xfp8_block", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(torch::kInt16), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
 
@@ -1027,14 +1043,10 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const tor
   return torch::matmul(x.view({samples, x.size(2)}), w_.t()).view({x.size(0), x.size(1), w.size(0)});
 }
 
-torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps, const ::std::optional<torch::Tensor> &out = ::std::nullopt) {
+torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps, int64_t id = 0) {
   CHECK_CUDA(x);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
-  if (out.has_value()) {
-    antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}), rms_w, out.value().view({-1, x.size(-1)})}, {eps}, false, 0, 2);
-    return out.value();
-  }
-  return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}), rms_w}, {eps}).view(x.sizes());
+  return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}).view(torch::kInt32), rms_w.view(torch::kInt32)}, {eps, id / 2}).view(torch::kBFloat16).view({x.size(0), x.size(1), -1});
 }
 
 std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static(
@@ -1082,6 +1094,151 @@ std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
   return {top_v_out, top_k_out};
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16(
+  const torch::Tensor &qkv_act,
+  const torch::Tensor &cos_sin,
+  const torch::Tensor &positions,
+  const torch::Tensor &q_a_norm,
+  const torch::Tensor &kv_a_norm,
+  const torch::Tensor &q_b_proj,
+  const torch::Tensor &k_b_proj,
+  int64_t n_local_heads
+) {
+  auto x = qkv_act;
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(x.dim(), 3);
+  CHECK_EQ(x.size(-1), 2112);
+  int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
+
+  auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
+  auto kv = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
+  auto k_output = antares::ops::call("rope_k_bf16", {kv.view({batch * seqlen, 16, 32}), cos_sin, x.view({batch * seqlen, 33, 32, 2}), positions}, {}).view({batch, seqlen, 576});
+
+  auto &w_q_b_proj = q_b_proj;
+  CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(w_q_b_proj.dim(), 4);
+  CHECK_EQ(k_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(k_b_proj.dim(), 3);
+
+  auto qh = torch::matmul(w_q_b_proj, q.view({batch * seqlen, q.size(2)}).t()).view({2, n_local_heads, 128, batch * seqlen});
+  auto q_output = torch::matmul(qh[0].transpose(1, 2), k_b_proj);
+
+  q_output = antares::ops::call("rope_q_bf16", {q_output.view({n_local_heads, batch * seqlen, 16, 32}), cos_sin, qh[1].view({n_local_heads, 2, 32, 2, batch * seqlen}), positions}, {}).view({batch, seqlen, n_local_heads, 576});
+  return {q_output, k_output, kv};
+}
+
+torch::Tensor warp_deepseek_r1_attn_f16xf8_block_scal(
+  const torch::Tensor &data,
+  const torch::Tensor &key_cache,
+  const torch::Tensor &val_cache,
+  const torch::Tensor &cos_sin,
+  const torch::Tensor &qkv_a_proj,
+  const torch::Tensor &qkv_a_proj_scal,
+  const torch::Tensor &q_a_norm,
+  const torch::Tensor &kv_a_norm,
+  const torch::Tensor &q_b_proj,
+  const torch::Tensor &q_b_proj_scal,
+  const torch::Tensor &kv_b_proj,
+  const torch::Tensor &kv_b_proj_scal,
+  const torch::Tensor &o_proj,
+  const torch::Tensor &o_proj_scal,
+  int64_t pos,
+  int64_t n_local_heads
+) {
+  CHECK_CUDA(data);
+  CHECK_EQ(data.dim(), 3);
+  int batch = data.size(0), seqlen = data.size(1), n_heads = n_local_heads;
+
+  if (val_cache.numel() <= 1) {
+    static std::unordered_map<void*, torch::Tensor> q_b_cache;
+    auto it = q_b_cache.find(q_b_proj.data_ptr());
+    if (it == q_b_cache.end()) {
+      auto w_q_b_proj = warp_to_bfloat16(q_b_proj, q_b_proj_scal);
+      w_q_b_proj = torch::pad(w_q_b_proj.view({n_local_heads, -1, w_q_b_proj.size(1)}), {0, 0, 0, 64}).view({n_local_heads, 2, -1, w_q_b_proj.size(1)}).permute({1, 0, 2, 3}).contiguous();
+      q_b_cache[q_b_proj.data_ptr()] = w_q_b_proj;
+      it = q_b_cache.find(q_b_proj.data_ptr());
+    }
+
+    static std::unordered_map<void*, std::tuple<torch::Tensor, torch::Tensor>> wkv_b_;
+    auto it2 = wkv_b_.find(kv_b_proj_scal.data_ptr());
+    if (it2 == wkv_b_.end()) {
+      auto _ = antares::ops::call("to_bfloat16_3d", {kv_b_proj.unsqueeze(0), kv_b_proj_scal.unsqueeze(0)}, {}).
+        view({n_local_heads, 2, -1, kv_b_proj.size(-1)}).permute({1, 0, 2, 3}).contiguous(); // 2, H, 128, 512
+      wkv_b_[kv_b_proj_scal.data_ptr()] = {_.select(0, 0), _.select(0, 1).transpose(1, 2)}; // H, D(128), C(512)
+      it2 = wkv_b_.find(kv_b_proj_scal.data_ptr());
+    }
+    auto wkc = std::get<0>(it2->second), wvc = std::get<1>(it2->second);
+    auto qkv = warp_gemm_nt_bf16xfp8_block_scal(data, qkv_a_proj, qkv_a_proj_scal); // [B, S, 1536 + 512 + 64]
+
+    auto positions = torch::full({batch}, pos, torch::TensorOptions().dtype(torch::kInt64).device(data.device()));
+    auto inputs = warp_multi_head_latent_rope_bf16(qkv, cos_sin, positions, q_a_norm, kv_a_norm, it->second, wkc, n_local_heads);
+    key_cache.narrow(0, pos, 1).copy_(std::get<1>(inputs).permute({1, 0, 2}));
+    auto Q = std::get<0>(inputs), C = key_cache.narrow(0, 0, pos + seqlen); // S2, B, (512 + 64)
+    auto scores = at::einsum("bshc,tbc->bsht", {Q, C}) * 0.1352337788608801f;
+    Q = at::einsum("bsht,tbc->bshc", {at::softmax(scores, -1), C}).narrow(-1, 0, 512);
+    Q = at::einsum("bshc,hcd->bshd", {Q, wvc}).contiguous();
+    Q = warp_gemm_nt_bf16xfp8_block_scal(Q.view({batch, seqlen, -1}), o_proj, o_proj_scal);
+    return Q;
+  }
+
+  auto xb = data;
+  auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, 1536 + 512 + 64]
+  auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
+  auto k_pe_out = torch::empty_like(k_pe);
+  antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, pos).select(0, 0), cos_sin.select(0, pos).select(0, 1), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
+
+  q = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
+  auto query_states = q.view({batch, seqlen, -1, 192});
+  auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
+  auto q_pe_out = torch::empty_like(q_pe);
+  antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, pos).select(0, 0), cos_sin.select(0, pos).select(0, 1), q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
+
+  if (val_cache.numel() > 1) {
+    kv = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
+
+    antares::ops::call("cache_fill_bf16", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
+                                      // [B,S,H,64]  [B,S,64]  [B,S,H,128:]    [B,H,128:]
+
+    antares::ops::call("cache_move_bf16", {kv.view({batch, seqlen, n_heads, 2, 128}), key_cache.narrow(0, pos, seqlen), val_cache.narrow(0, pos, seqlen)}, {}, false, 0, 2);
+                                                 // [B,S,H,2,M]                                [S,B,H,:128]                 [S,B,H,:128]
+
+    auto key_states = key_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 192});
+    auto value_states = val_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 128});
+    query_states = query_states.permute({1, 0, 2, 3}).view({1, seqlen, -1, 192});
+    CHECK_EQ(query_states.size(1), 1);
+
+    auto lm = torch::empty({2, batch * n_heads, 64}, torch::TensorOptions().dtype(torch::kBFloat16).device(query_states.device()));
+    auto attn_output = antares::ops::call("self_attn_infer_bf16", {query_states.squeeze(0).squeeze(0), key_states.squeeze(0), value_states.squeeze(0), lm}, {0.1352337788608801f});
+    xb = torch::matmul(antares::ops::call("self_attn_reduce_bf16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
+
+    // xb = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), key_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), value_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
+  } else {
+    kv = torch::cat({warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), k_pe_out}, -1); // [B, S, 512]
+    key_cache.narrow(0, pos, seqlen).narrow(1, 0, batch) = kv.permute({1, 0, 2}); // [S, B, 512 + 64]
+
+    static std::unordered_map<void*, torch::Tensor> wkv_b_;
+    auto it = wkv_b_.find(kv_b_proj_scal.data_ptr());
+    if (it == wkv_b_.end()) {
+      wkv_b_[kv_b_proj_scal.data_ptr()] = antares::ops::call("to_bfloat16_3d", {kv_b_proj.unsqueeze(0), kv_b_proj_scal.unsqueeze(0)}, {}).
+        view({n_heads, 2, -1, kv_b_proj.size(-1)}).permute({1, 0, 2, 3}).contiguous(); // 2, H, 128, 512
+      it = wkv_b_.find(kv_b_proj_scal.data_ptr());
+    }
+    auto _0 = it->second.select(0, 0), _1 = it->second.select(0, 1); // H, D(128), C(512)
+    // k_pe_out, q_pe_out -- 1, 1, 64 | 1, 1, 16, 64
+    auto q_nope = query_states.narrow(-1, 0, 128).contiguous(); // B, S, H, D
+    q_nope = at::einsum("bshd,hdc->bshc", {q_nope, _0}).contiguous(); // B, S, H, C(512)
+    q_nope = torch::cat({q_nope, q_pe_out}, -1);
+
+    auto R = key_cache.narrow(0, 0, pos + seqlen); // S2, B, (512 + 64)
+    auto scores_ = at::einsum("bshc,tbc->bsht", {q_nope, R}) * 0.1352337788608801f;
+    _0 = at::einsum("bsht,tbc->bshc", {at::softmax(scores_, -1), R});
+    _0 = _0.narrow(-1, 0, 512).contiguous();
+    xb = at::einsum("bshc,hdc->bshd", {_0, _1}).contiguous();
+  }
+  xb = warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
+  return xb;
+}
 
 namespace {
   int64_t n_local_heads;
@@ -1114,83 +1271,6 @@ namespace {
   torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
 }
 
-
-torch::Tensor warp_deepseek_r1_latent_attn_f16(
-  const torch::Tensor &data,
-  const torch::Tensor &key_cache,
-  const torch::Tensor &val_cache,
-  const torch::Tensor &qkv_a_proj,
-  const torch::Tensor &qkv_a_proj_scal,
-  const torch::Tensor &q_a_norm,
-  const torch::Tensor &kv_a_norm,
-  const torch::Tensor &q_b_proj,
-  const torch::Tensor &q_b_proj_scal,
-  const torch::Tensor &kv_b_proj,
-  const torch::Tensor &kv_b_proj_scal,
-  const torch::Tensor &o_proj,
-  const torch::Tensor &o_proj_scal,
-  int64_t pos
-) {
-  CHECK_CUDA(data);
-  CHECK_EQ(data.dim(), 3);
-  auto xb = data;
-  int batch = xb.size(0), seqlen = xb.size(1), n_heads = n_local_heads;
-
-  auto qkv = warp_gemm_nt_bf16xfp8_block_scal(xb, qkv_a_proj, qkv_a_proj_scal); // [B, S, 1536 + 512 + 64]
-  auto q = qkv.narrow(-1, 0, 1536).contiguous(), kv = qkv.narrow(-1, 1536, 512).contiguous(), k_pe = qkv.narrow(-1, 2048, 64).contiguous();
-  auto k_pe_out = torch::empty_like(k_pe);
-  antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), k_pe.view({-1, 32, 2}), k_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
-
-  q = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(q, q_a_norm, 1e-6f), q_b_proj, q_b_proj_scal);
-  auto query_states = q.view({batch, seqlen, -1, 192});
-  auto q_pe = query_states.narrow(-1, 128, 64).contiguous();
-  auto q_pe_out = torch::empty_like(q_pe);
-  antares::ops::call("rotary_lookup_bf16", {cos_sin.select(0, 0).select(0, pos), cos_sin.select(0, 1).select(0, pos), q_pe.view({-1, 32, 2}), q_pe_out.view({-1, 2, 32})}, {}, false, 0, 3);
-
-  if (val_cache.numel() > 1) {
-    kv = warp_gemm_nt_bf16xfp8_block_scal(warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f), kv_b_proj, kv_b_proj_scal);
-
-    antares::ops::call("cache_fill_bf16", {q_pe_out, k_pe_out, query_states, key_cache.select(0, pos)}, {128}, false, 0, 3);
-                                      // [B,S,H,64]  [B,S,64]  [B,S,H,128:]    [B,H,128:]
-
-    antares::ops::call("cache_move_bf16", {kv.view({batch, seqlen, n_heads, 2, 128}), key_cache.narrow(0, pos, seqlen), val_cache.narrow(0, pos, seqlen)}, {}, false, 0, 2);
-                                                 // [B,S,H,2,M]                                [S,B,H,:128]                 [S,B,H,:128]
-
-    auto key_states = key_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 192});
-    auto value_states = val_cache.narrow(0, 0, pos + seqlen).view({1, pos + seqlen, batch * n_heads, 128});
-    query_states = query_states.permute({1, 0, 2, 3}).view({1, seqlen, -1, 192});
-    CHECK_EQ(query_states.size(1), 1);
-
-    auto lm = torch::empty({2, batch * n_heads, 64}, torch::TensorOptions().dtype(torch::kBFloat16).device(query_states.device()));
-    auto attn_output = antares::ops::call("self_attn_infer_bf16", {query_states.squeeze(0).squeeze(0), key_states.squeeze(0), value_states.squeeze(0), lm}, {0.1352337788608801f});
-    xb = torch::matmul(antares::ops::call("self_attn_reduce_bf16", {lm}, {}).unsqueeze(1), attn_output).to(query_states.dtype());
-
-    // xb = std::get<0>(at::native::_scaled_dot_product_attention_math(query_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), key_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), value_states.permute({0, 2, 1, 3}).to(torch::kBFloat16), {}, 0, false, {}, 0.1352337788608801)).permute({0, 2, 1, 3}).to(query_states.dtype());
-  } else {
-    kv = warp_rmsnorm_bf16(kv, kv_a_norm, 1e-6f); // [B, S, 512]
-    key_cache.narrow(0, pos, seqlen).narrow(1, 0, batch) = torch::cat({kv, k_pe_out}, -1).permute({1, 0, 2}); // [S, B, 512 + 64]
-
-    static std::unordered_map<void*, torch::Tensor> wkv_b_;
-    auto it = wkv_b_.find(kv_b_proj_scal.data_ptr());
-    if (it == wkv_b_.end()) {
-      wkv_b_[kv_b_proj_scal.data_ptr()] = antares::ops::call("to_bfloat16_3d", {kv_b_proj.unsqueeze(0), kv_b_proj_scal.unsqueeze(0)}, {}).
-        view({n_heads, 2, -1, kv_b_proj.size(-1)}).permute({1, 0, 2, 3}).contiguous(); // 2, H, 128, 512
-      it = wkv_b_.find(kv_b_proj_scal.data_ptr());
-    }
-    auto _0 = it->second.select(0, 0), _1 = it->second.select(0, 1); // H, D(128), C(512)
-    // k_pe_out, q_pe_out -- 1, 1, 64 | 1, 1, 16, 64
-    auto q_nope = query_states.narrow(-1, 0, 128).contiguous(); // B, S, H, D
-    q_nope = at::einsum("bshd,hdc->bshc", {q_nope, _0}).contiguous(); // B, S, H, C(512)
-
-    auto R = key_cache.narrow(0, 0, pos + seqlen); // S2, B, (512 + 64)
-    auto scores_ = at::einsum("bshc,tbc->bsht", {torch::cat({q_nope, q_pe_out}, -1), R}) * 0.1352337788608801f;
-    _0 = at::einsum("bsht,tbc->bshc", {at::softmax(scores_, -1), R});
-    _0 = _0.narrow(-1, 0, 512).contiguous();
-    xb = at::einsum("bshc,hdc->bshd", {_0, _1}).contiguous();
-  }
-  xb = warp_gemm_nt_bf16xfp8_block_scal(xb.view({batch, seqlen, -1}), o_proj, o_proj_scal);
-  return xb;
-}
 
 torch::Tensor warp_shared_expert_f16xf8(
   const torch::Tensor &x,
@@ -1375,7 +1455,7 @@ torch::Tensor warp_deepseek_r1_forward(
     #pragma unroll
     for (int l = 0; l < rms_att_ws.size(); ++l) {
       auto xb = warp_rmsnorm_bf16(x, rms_att_ws[l], 1e-6f);
-      xb = warp_deepseek_r1_latent_attn_f16(xb, key_cache[l], val_cache[l], qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], pos);
+      xb = warp_deepseek_r1_attn_f16xf8_block_scal(xb, key_cache[l], val_cache[l], cos_sin, qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], pos, n_local_heads);
       x = warp_x_add_allreduce_y_f16(x, xb);
 
       xb = warp_rmsnorm_bf16(x, rms_ffn_ws[l], 1e-6f);
@@ -1478,9 +1558,10 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("nccl_bcast", &warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
   m.def("x_add_allreduce_y_f16", &warp_x_add_allreduce_y_f16);
-  m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_latent_attn_f16);
+  m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_attn_f16xf8_block_scal);
   m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
+  m.def("multi_head_latent_rope_bf16", warp_multi_head_latent_rope_bf16);
 
   m.def("deepseek_sigmoid_top_8_static", warp_deepseek_sigmoid_top_8_static);
   m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
