@@ -1109,6 +1109,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_r
   CHECK_EQ(x.dtype(), torch::kBFloat16);
   CHECK_EQ(x.dim(), 3);
   CHECK_EQ(x.size(-1), 2112);
+  CHECK_EQ(cos_sin.dtype(), torch::kFloat32);
+  CHECK_EQ(positions.dtype(), torch::kInt64);
+
   int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
 
   auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);

@@ -99,6 +99,42 @@ def perform(fn, num_runs=100):
     print('Function Latency = %.8lf sec\n' % cost)
     return max(cost, 1e-6)
 
+
+def from_url(link):
+  import requests
+  import tempfile
+  file_name = tempfile.mktemp()
+
+  if not os.path.exists(file_name) and link is not None:
+    dirname = os.path.dirname(file_name) or '.'
+    try:
+      os.makedirs(dirname)
+    except FileExistsError:
+      pass
+    origin_name = file_name
+    with open(origin_name, "wb") as fp:
+      response = requests.get(link, stream=True)
+      total_length = response.headers.get('content-length')
+
+      if total_length is None:
+        fp.write(response.content)
+      else:
+        dl = 0
+        total_length = int(total_length)
+        for data in response.iter_content(chunk_size=4096):
+          dl += len(data)
+          fp.write(data)
+          done = int(50 * dl / total_length)
+          sys.stdout.write("\rDownloading %s [%s%s]" % (origin_name, '=' * done, ' ' * (50-done)) )
+          sys.stdout.flush()
+    print()
+  else:
+    print(f'Loading datafile `{file_name}` from local disk ..')
+  import numpy as np
+  import torch
+  x = np.load(file_name)
+  return torch.tensor(x)
+
 def apply_rank_size_from_pattern(filename, rank, size, create_dir=True):
     if not re.search(r'\{rank\}', filename):
         logging.warning('Keyword `{rank}` is not found in file pattern: %s, which may cause collision in file access.' % filename)
