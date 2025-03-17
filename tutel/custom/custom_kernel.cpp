@@ -1468,7 +1468,7 @@ torch::Tensor warp_deepseek_r1_forward(
         CHECK_EQ(topk_exp_id.dim(), 2);
         auto logits_bf16 = samples < 4 ? antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {}) : \
           torch::matmul(xb, gate_moes[l - 3].t());
-        antares::ops::call("deepseek_r1_sigmoid_top_k_routed_scaled_f32", {logits_bf16.view({samples, logits_bf16.size(-1)}), gate_biases[l - 3], score_weight, topk_exp_id}, {}, false, 0, 3);
+        warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, gate_biases[l - 3], score_weight, topk_exp_id);
         xb = warp_glu_expert_f16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l - 3], moe_gate_up_ss[l - 3], moe_down_ws[l - 3], moe_down_ss[l - 3]);
       }
       x = warp_x_add_allreduce_y_f16(x, xb);
