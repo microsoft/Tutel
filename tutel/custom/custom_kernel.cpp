@@ -959,6 +959,7 @@ torch::Tensor warp_sparse_bmm_infer(const torch::Tensor &x, const torch::Tensor 
   return y;
 }
 
+#if defined(USE_NCCL)
 template<class FN>
 void perform(FN func, int num_runs = 1000) {
   for (int _ = 0; _ < 5; ++_)
@@ -1548,12 +1549,13 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16_fnuz(
   auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s_16x16_fnuz", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_w.view(_0.sizes()).view(torch::kInt16), moe_gate_up_s}, {});
   return antares::ops::call("gemm_down_weight_sum_bf16xf8_s_16x16_fnuz", {xb.view(torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_w.view(_1.sizes()).view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), _1.size(1)});
 }
-
+#endif
 
 TORCH_LIBRARY(tutel_ops, m) {
   m.def("cumsum", warp_cumsum);
   m.def("sparse_bmm_infer", warp_sparse_bmm_infer);
 
+#if defined(USE_NCCL)
   m.def("gemm_nt_bf16xfp8_block_scal", warp_gemm_nt_bf16xfp8_block_scal);
 
   m.def("test_allreduce_bf16", &warp_test_allreduce_bf16);
@@ -1574,5 +1576,6 @@ TORCH_LIBRARY(tutel_ops, m) {
 
   m.def("glu_expert_bf16xf8_block_scal_16x16", warp_glu_expert_f16xf8_block_scal_16x16);
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_f16xf8_block_scal_16x16_fnuz);
+#endif
 }
 #endif
