@@ -1097,6 +1097,49 @@ std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
   return {top_v_out, top_k_out};
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16_v2(
+  const torch::Tensor &qkv_act,
+  const torch::Tensor &cos_sin,
+  const torch::Tensor &positions,
+  const torch::Tensor &q_a_norm,
+  const torch::Tensor &kv_a_norm,
+  const torch::Tensor &q_b_proj,
+  const torch::Tensor &k_b_proj,
+  int64_t n_local_heads
+) {
+  auto x = qkv_act;
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(x.dim(), 3);
+  CHECK_EQ(x.size(-1), 2112);
+  CHECK_EQ(cos_sin.dtype(), torch::kFloat32);
+  CHECK_EQ(positions.dtype(), torch::kInt64);
+
+  int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
+  int samples = batch * seqlen;
+
+  auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
+  auto v_output = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
+  auto k_output = antares::ops::call("rope_k_bf16", {v_output.view({samples, 16, 32}), cos_sin, x.view({samples, 33, 32, 2}), positions}, {}).view({batch, seqlen, 576});
+
+  auto &w_q_b_proj = q_b_proj;
+  CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(w_q_b_proj.dim(), 2);
+  CHECK_EQ(k_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(k_b_proj.dim(), 3);
+  CHECK_CONTIGUOUS(k_b_proj.transpose(1, 2));
+
+  auto q_output = torch::empty({batch, seqlen, n_local_heads, 512 + 64}, torch::TensorOptions().dtype(q.dtype()).device(q.device()));
+  torch::Tensor qh = (samples >= 4) ? torch::matmul(q, w_q_b_proj.t()).view({samples, n_local_heads, -1}) : \
+    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), w_q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1});
+  auto buffer = q_output.flatten(0, 1).transpose(0, 1).narrow(-1, 0, 512);
+  torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj);
+
+  antares::ops::call("rope_q_bf16_put", {cos_sin.view(torch::kInt64), qh.view({qh.size(0), n_local_heads, 3, 16, 2, 2}), positions, q_output.view({qh.size(0), n_local_heads, 9, 2, 32}).view(torch::kInt32)}, {});
+  return {q_output, k_output, v_output};
+}
+
+
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16(
   const torch::Tensor &qkv_act,
   const torch::Tensor &cos_sin,
@@ -1166,7 +1209,7 @@ torch::Tensor warp_deepseek_r1_attn_f16xf8_block_scal(
     auto it = q_b_cache.find(q_b_proj.data_ptr());
     if (it == q_b_cache.end()) {
       auto w_q_b_proj = warp_to_bfloat16(q_b_proj, q_b_proj_scal);
-      w_q_b_proj = torch::pad(w_q_b_proj.view({n_local_heads, -1, w_q_b_proj.size(1)}), {0, 0, 0, 64}).view({n_local_heads, 2, -1, w_q_b_proj.size(1)}).permute({1, 0, 2, 3}).contiguous();
+      // w_q_b_proj = torch::pad(w_q_b_proj.view({n_local_heads, -1, w_q_b_proj.size(1)}), {0, 0, 0, 64}).view({n_local_heads, 2, -1, w_q_b_proj.size(1)}).permute({1, 0, 2, 3}).contiguous();
       q_b_cache[q_b_proj.data_ptr()] = w_q_b_proj;
       it = q_b_cache.find(q_b_proj.data_ptr());
     }
@@ -1184,7 +1227,7 @@ torch::Tensor warp_deepseek_r1_attn_f16xf8_block_scal(
 
     static torch::Tensor posperm = torch::arange(0, cos_sin.size(0), torch::TensorOptions().dtype(torch::kInt64).device(data.device()));
     auto positions = batch == 1 ? posperm.narrow(0, pos, 1) : torch::full({batch}, pos, torch::TensorOptions().dtype(torch::kInt64).device(data.device()));
-    auto inputs = warp_multi_head_latent_rope_bf16(qkv, cos_sin, positions, q_a_norm, kv_a_norm, it->second, wkc, n_local_heads);
+    auto inputs = warp_multi_head_latent_rope_bf16_v2(qkv, cos_sin, positions, q_a_norm, kv_a_norm, it->second, wkc, n_local_heads);
     key_cache.narrow(0, pos, 1).copy_(std::get<1>(inputs).permute({1, 0, 2}));
 
     auto Q = std::get<0>(inputs), C = key_cache.narrow(0, 0, pos + seqlen); // S2, B, (512 + 64)
@@ -1556,6 +1599,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
   m.def("multi_head_latent_rope_bf16", warp_multi_head_latent_rope_bf16);
+  m.def("multi_head_latent_rope_bf16_v2", warp_multi_head_latent_rope_bf16_v2);
 
   m.def("deepseek_sigmoid_top_8_static", warp_deepseek_sigmoid_top_8_static);
   m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
