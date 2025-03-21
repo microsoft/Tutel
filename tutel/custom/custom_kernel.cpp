@@ -995,7 +995,25 @@ void show(const std::vector<torch::Tensor> &xs) {
   }
 }
 
+torch::Tensor warp_to_float32(const torch::Tensor &w, const torch::Tensor &scal) {
+  CHECK_CUDA(w);
+  CHECK_CUDA(scal);
+
+  auto w_ = w, scal_ = scal;
+  if (w_.dim() < 3)
+    w_ = w_.unsqueeze(0), scal_ = scal_.unsqueeze(0);
+  CHECK_EQ(w_.dim(), 3);
+  CHECK_EQ(scal_.dim(), 3);
+  w_ = antares::ops::call("to_float32_3d", {w_, scal_}, {});
+  if (w.dim() < 3)
+    w_ = w_.squeeze(0);
+  return w_;
+}
+
 torch::Tensor warp_to_bfloat16(const torch::Tensor &w, const torch::Tensor &scal) {
+  CHECK_CUDA(w);
+  CHECK_CUDA(scal);
+
   auto w_ = w, scal_ = scal;
   if (w_.dim() < 3)
     w_ = w_.unsqueeze(0), scal_ = scal_.unsqueeze(0);
@@ -1017,11 +1035,16 @@ torch::Tensor warp_to_bfloat16(const torch::Tensor &w, const torch::Tensor &scal
 torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const torch::Tensor &w, const torch::Tensor &scal, int64_t policy = 0) {
   CHECK_CUDA(x);
   CHECK_EQ(x.dim(), 3);
-  CHECK_EQ(w.dim(), 2);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(w.dim(), 2);
 
   int samples = x.size(0) * x.size(1);
+  if (scal.dim() == 1) {
+    CHECK_EQ(w.size(0), scal.size(0));
+    return antares::ops::call("gemv_nt_bf16xfp8_row", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(torch::kInt16), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
+  }
 
+  CHECK_EQ(scal.dim(), 2);
   if (w.dtype() == torch::kBFloat16)
     return torch::matmul(x.view({samples, x.size(2)}), w.t()).view({x.size(0), x.size(1), w.size(0)});
 
@@ -1051,29 +1074,6 @@ torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms
   CHECK_EQ(x.dtype(), torch::kBFloat16);
   return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}).view(torch::kInt32), rms_w.view(torch::kInt32)}, {eps, id / 2}).view(torch::kBFloat16).view({x.size(0), x.size(1), -1});
 }
-
-std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static(
-     const torch::Tensor &logits_bf16,
-     const torch::Tensor &moe_gate_b_bf16,
-     const ::std::optional<torch::Tensor> &top_v_out_,
-     const ::std::optional<torch::Tensor> &top_k_out_) {
-  CHECK_CUDA(logits_bf16);
-  CHECK_EQ(logits_bf16.dtype(), torch::kBFloat16);
-  CHECK_EQ(moe_gate_b_bf16.dtype(), torch::kBFloat16);
-
-  int n_experts = logits_bf16.size(-1);
-  AT_ASSERTM(n_experts == 256, "Deepseek R1 requires 256 experts for gating.");
-  int samples = logits_bf16.numel() / n_experts;
-
-  auto device = logits_bf16.device();
-  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
-  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt32).device(device));
-  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt32, "Output tensor space should be float32 for top_scores and int32 for top_ids.");
-
-  antares::ops::call("deepseek_r1_sigmoid_top_k_f32", {logits_bf16.view({samples, n_experts}), moe_gate_b_bf16, top_v_out, top_k_out}, {}, false, 0, 3);
-  return {top_v_out, top_k_out};
-}
-
 
 std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
      const torch::Tensor &logits_bf16,
@@ -1510,42 +1510,6 @@ torch::Tensor warp_deepseek_r1_forward(
     return torch::matmul(x, weight_classify.t());
 }
 
-torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16(
-  const torch::Tensor &x,
-  const torch::Tensor &expert_ids,
-  const torch::Tensor &expert_weight,
-  const torch::Tensor &moe_gate_up_w,
-  const torch::Tensor &moe_gate_up_s,
-  const torch::Tensor &moe_down_w,
-  const torch::Tensor &moe_down_s) {
-
-  int model_dim = x.size(-1);
-  int samples = x.numel() / model_dim;
-
-  CHECK_CUDA(x);
-  CHECK_EQ(x.dtype(), torch::kBFloat16);
-  CHECK_EQ(x.dim(), 3);
-  CHECK_EQ(expert_ids.dim(), 2);
-  CHECK_EQ(expert_weight.dim(), 2);
-
-  CHECK_EQ(moe_gate_up_w.dim(), 5); // shape = [256, 32, 448, 16, 16]
-  CHECK_EQ(moe_gate_up_s.dim(), 3); // shape = [256, 4, 56]
-  CHECK_EQ(moe_gate_up_w.size(2), 448);
-  CHECK_EQ(moe_gate_up_w.size(-2), 16);
-  CHECK_EQ(moe_gate_up_w.size(-1), 16);
-
-  CHECK_EQ(moe_down_w.dim(), 5); // shape = [256, 448, 16, 16, 16]
-  CHECK_EQ(moe_down_s.dim(), 3); // shape = [256, 56, 2]
-  CHECK_EQ(moe_down_w.size(1), 448);
-  CHECK_EQ(moe_down_w.size(-2), 16);
-  CHECK_EQ(moe_down_w.size(-1), 16);
-
-  auto _0 = moe_gate_up_w.view({moe_gate_up_w.size(0), moe_gate_up_w.size(1) * moe_gate_up_w.size(3), moe_gate_up_w.size(2) * moe_gate_up_w.size(4)});
-  auto _1 = moe_down_w.view({moe_down_w.size(0), moe_down_w.size(1) * moe_down_w.size(3), moe_down_w.size(2) * moe_down_w.size(4)});
-  auto xb = antares::ops::call("gemm_gate_up_silu_bf16xf8_s_16x16", {x.view({samples, model_dim}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(torch::kInt16), moe_gate_up_w.view(_0.sizes()).view(torch::kInt16), moe_gate_up_s}, {});
-  return antares::ops::call("gemm_down_weight_sum_bf16xf8_s_16x16", {xb.view(torch::kInt32), expert_weight, expert_ids, moe_down_w.view(torch::kInt16), moe_down_w.view(_1.sizes()).view(torch::kInt16), moe_down_s}, {}).view({x.size(0), x.size(1), _1.size(1)});
-}
-
 torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16_fnuz(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
@@ -1601,13 +1565,12 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("multi_head_latent_rope_bf16", warp_multi_head_latent_rope_bf16);
   m.def("multi_head_latent_rope_bf16_v2", warp_multi_head_latent_rope_bf16_v2);
 
-  m.def("deepseek_sigmoid_top_8_static", warp_deepseek_sigmoid_top_8_static);
   m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
   m.def("to_bfloat16", warp_to_bfloat16);
+  m.def("to_float32", warp_to_float32);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
 
-  m.def("glu_expert_bf16xf8_block_scal_16x16", warp_glu_expert_f16xf8_block_scal_16x16);
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_f16xf8_block_scal_16x16_fnuz);
 #endif
 }
