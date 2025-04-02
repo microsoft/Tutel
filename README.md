@@ -27,12 +27,18 @@ We compare three solutions that support <ins>Full-Precision Inference (PPL = 0) 
         --prompt "Given x + 1/x = 1, calculate x^2025 + 1/(x^2025)"
 ```
 
-|  ***Machine Type***   | ***Recommended DeepSeek Model ID***  |
-|  ----  | ----  |
-| $"A100 \times 8" or "A800 \times 8"$ | nvidia/DeepSeek-R1-FP4 |
-| $MI300 \times 8$ (option-1)  | nvidia/DeepSeek-R1-FP4 |
-| $MI300 \times 8$ (option-2)  | deepseek-ai/DeepSeek-R1 |
-| $MI300 \times 8$ (option-3)  | deepseek-ai/DeepSeek-V3-0324 |
+#### FP4 Dataset: nvidia/DeepSeek-R1-FP4
+|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
+|  ----  | ----  | ----  | ----  |
+| $"A100 \times 8" or "A800 \times 8"$ | No Support | No Support | 57 Decoding TPS for bsz = 1 |
+| $MI300 \times 8$  | No Support | No Support | 96 Decoding TPS for bsz = 1 |
+
+#### FP8 Dataset: deepseek-ai/DeepSeek-R1 or deepseek-ai/DeepSeek-V3-0324
+|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
+|  ----  | ----  | ----  | ----  |
+| $"A100 \times 8" or "A800 \times 8"$ | OoM | OoM | OoM |
+| $MI300 \times 8$  | No Support | 42 Decoding TPS for bsz = 1 | 105 Decoding TPS for bsz = 1 |
+
 
 - Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8:
 ```sh
