@@ -1106,6 +1106,14 @@ std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
   return {top_v_out, top_k_out};
 }
 
+torch::Tensor warp_rope_k_bf16(const torch::Tensor &v_output, const torch::Tensor &cos_sin, const torch::Tensor &x, const torch::Tensor &positions) {
+  return antares::ops::call("rope_k_bf16", {v_output.view({-1, 16, 32}), cos_sin, x.view({-1, 33, 32, 2}), positions}, {});
+}
+
+void warp_rope_q_bf16_put(const torch::Tensor &cos_sin, const torch::Tensor &qh, const torch::Tensor &positions, const torch::Tensor &q_output) {
+  antares::ops::call("rope_q_bf16_put", {cos_sin.view(torch::kInt64), qh.view({qh.size(0), -1, 3, 16, 2, 2}), positions, q_output.view({qh.size(0), -1, 9, 2, 32}).view(torch::kInt32)}, {});
+}
+
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16_v2(
   const torch::Tensor &qkv_act,
   const torch::Tensor &cos_sin,
@@ -1129,7 +1137,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_r
 
   auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
   auto v_output = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
-  auto k_output = antares::ops::call("rope_k_bf16", {v_output.view({samples, 16, 32}), cos_sin, x.view({samples, 33, 32, 2}), positions}, {}).view({batch, seqlen, 576});
+  auto k_output = warp_rope_k_bf16(v_output, cos_sin, x, positions).view({batch, seqlen, 576});
 
   auto &w_q_b_proj = q_b_proj;
   CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
@@ -1139,12 +1147,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_r
   CHECK_CONTIGUOUS(k_b_proj.transpose(1, 2));
 
   auto q_output = torch::empty({batch, seqlen, n_local_heads, 512 + 64}, torch::TensorOptions().dtype(q.dtype()).device(q.device()));
-  torch::Tensor qh = (IS_NVIDIA_GPU || samples >= 4) ? torch::matmul(q, w_q_b_proj.t()).view({samples, n_local_heads, -1}) : \
-    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), w_q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1}); // (BS, 1536) @ (3072, 1536)
+  torch::Tensor qh = torch::matmul(q, w_q_b_proj.t()).view({samples, n_local_heads, -1});
   auto buffer = q_output.flatten(0, 1).transpose(0, 1).narrow(-1, 0, 512);
   torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj);
 
-  antares::ops::call("rope_q_bf16_put", {cos_sin.view(torch::kInt64), qh.view({qh.size(0), n_local_heads, 3, 16, 2, 2}), positions, q_output.view({qh.size(0), n_local_heads, 9, 2, 32}).view(torch::kInt32)}, {});
+  warp_rope_q_bf16_put(cos_sin, qh, positions, q_output);
   return {q_output, k_output, v_output};
 }
 
@@ -1706,6 +1713,8 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
 
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_f16xf8_block_scal_16x16_fnuz);
+  m.def("rope_k_bf16", warp_rope_k_bf16);
+  m.def("warp_rope_q_bf16_put", warp_rope_q_bf16_put);
 #endif
 }
 #endif
