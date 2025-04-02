@@ -16,6 +16,24 @@ We compare three solutions that support <ins>Full-Precision Inference (PPL = 0) 
 
 ## What's New:
 
+- Tutel v0.4.2: Support R1-FP4 for "NVIDIA A100/A800 (80G) x 8":
+```sh
+  >> Example:
+    huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
+
+    docker run -it --rm --ipc=host --privileged -p 8000:8000 \
+        --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
+        tutelgroup/deepseek-671b:a100x8-chat-20250401 --model_path ./nvidia/DeepSeek-R1-FP4 \
+        --prompt "Given x + 1/x = 1, calculate x^2025 + 1/(x^2025)"
+```
+
+|  ***Machine Type***   | ***Recommended DeepSeek Model ID***  |
+|  ----  | ----  |
+| $"A100 \times 8" or "A800 \times 8"$ | nvidia/DeepSeek-R1-FP4 |
+| $MI300 \times 8$ (option-1)  | nvidia/DeepSeek-R1-FP4 |
+| $MI300 \times 8$ (option-2)  | deepseek-ai/DeepSeek-R1 |
+| $MI300 \times 8$ (option-3)  | deepseek-ai/DeepSeek-V3-0324 |
+
 - Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8:
 ```sh
   >> Example:
