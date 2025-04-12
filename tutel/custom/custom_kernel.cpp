@@ -12,6 +12,7 @@
 #include <cuda.h>
 #include <nvrtc.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <ATen/cuda/CUDAGraph.h>
 #else
 #undef USE_NCCL
 #endif
@@ -117,7 +118,7 @@ static std::string nvcc_compile(const char* code, const std::string &arch) {
 #if !defined(__HIP_PLATFORM_HCC__) && !defined(__HIP_PLATFORM_AMD__)
     CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--fatbin", "-O4", "-gencode", ("arch=compute_" + arch + ",code=sm_" + arch).c_str(), (char *)NULL));
 #else
-    CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--amdgpu-target=" + arch).c_str(), (char *)NULL));
+    CHECK_EQ(-1, execl(entry.c_str(), entry.c_str(), code_path, "-o", fatbin_path.c_str(), "--genco", "-O4", "-w" , ("--offload-arch=" + arch).c_str(), (char *)NULL));
 #endif
     exit(1);
   } else {
@@ -338,7 +339,6 @@ static int g_world_size = 0, shared_world_size = 0;
 static int g_world_rank = 0, shared_world_rank = 0;
 static int g_local_size = 0;
 static int g_local_rank = 0;
-static int __dtype_size[256 * 256];
 
 // jit
 static int mem_stride_copy_char_fd = -1;
@@ -374,17 +374,6 @@ static void init_shared_nccl(
 
   shared_world_size = world_size;
   shared_world_rank = world_rank;
-
-  static_assert(sizeof(nccl_unique_id_tensor.dtype()) <= 2);
-  __dtype_size[(int)torch::kFloat64] = 8;
-  __dtype_size[(int)torch::kInt64] = 8;
-  __dtype_size[(int)torch::kFloat32] = 4;
-  __dtype_size[(int)torch::kInt32] = 4;
-  __dtype_size[(int)torch::kFloat16] = 2;
-  __dtype_size[(int)torch::kInt16] = 2;
-  __dtype_size[(int)torch::kInt8] = 1;
-  __dtype_size[(int)torch::kUInt8] = 1;
-  __dtype_size[(int)torch::kBool] = 1;
 }
 
 static void init_nccl(
@@ -472,16 +461,16 @@ static torch::Tensor& nccl_stream_acquire(torch::Tensor &tensor, int idx) {
 void warp_nccl_bcast(const torch::Tensor &t, int64_t root) {
   CHECK_CUDA(t);
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
-  auto stream = at::cuda::getCurrentCUDAStream();
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
   auto dtype = t.dtype();
-  int dtype_size = __dtype_size[*(unsigned short*)&dtype];
+  int dtype_size = torch::elementSize(torch::typeMetaToScalarType(dtype));
   ncclBcast(t.data_ptr(), t.numel() * dtype_size, ncclInt8, root, (ncclComm_t)shared_nccl_comm, stream);
 }
 
 void warp_nccl_all_reduce(const torch::Tensor &t, const torch::Tensor &out) {
   CHECK_CUDA(t);
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
-  auto stream = at::cuda::getCurrentCUDAStream();
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
   ncclDataType_t ncclType;
   if (t.dtype() == torch::kBFloat16)
     ncclType = ncclBfloat16;
@@ -515,28 +504,6 @@ static void warp_test_allreduce_bf16(int64_t bf16_count) {
   }
 }
 
-static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
-  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
-  CHECK_EQ(t.dtype(), torch::kBFloat16);
-  auto stream = at::cuda::getCurrentCUDAStream();
-
-#if 0
-  int numel = t.numel();
-  auto workspace = torch::empty({shared_world_size, numel}, torch::TensorOptions().dtype(t.dtype()).device(t.device()));
-  short *sptr = (short*)t.data_ptr(), *dptr = (short*)workspace.data_ptr();
-  ncclGroupStart();
-  for (int i = 0; i < shared_world_size; ++i) {
-    ncclSend(sptr, numel, ncclBfloat16, i, (ncclComm_t)shared_nccl_comm, stream);
-    ncclRecv(dptr + i * numel, numel, ncclBfloat16, i, (ncclComm_t)shared_nccl_comm, stream);
-  }
-  ncclGroupEnd();
-  return x + torch::sum(workspace, {0}).view(t.sizes());
-#else
-  ncclAllReduce(t.data_ptr(), t.data_ptr(), t.numel(), ncclBfloat16, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
-  return x + t;
-#endif
-}
-
 static void batch_all_to_all_v(const std::vector<torch::Tensor> &ins, const std::vector<torch::Tensor> &outs, const torch::Tensor &in_sizes_, const torch::Tensor &out_sizes_) {
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
 
@@ -544,16 +511,16 @@ static void batch_all_to_all_v(const std::vector<torch::Tensor> &ins, const std:
   auto out_sizes_cpu = out_sizes_.to(torch::kCPU).to(torch::kInt64);
   auto* in_sizes = (unsigned long long*)in_sizes_cpu.data_ptr();
   auto* out_sizes = (unsigned long long*)out_sizes_cpu.data_ptr();
-  auto stream = at::cuda::getCurrentCUDAStream();
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
 
   for (int k = 0; k < ins.size(); ++k) {
     ncclGroupStart();
     auto* in_buff = ins[k].data_ptr();
     auto* out_buff = outs[k].data_ptr();
     auto dtype = ins[k].dtype();
-    int size = __dtype_size[*(unsigned short*)&dtype];
+    int size = torch::elementSize(torch::typeMetaToScalarType(dtype));
     AT_ASSERTM(size > 0, "Data type of input tensors for batch_all_to_all_v are not recognized.");
-    AT_ASSERTM(k == 0 || ins[0].numel() == ins[k].numel(), "Tensor instances within batch_all_to_all_v are supposed to share same length.");
+    AT_ASSERTM(k == 0 || ins[0].numel() == ins[k].numel(), "Tensors within batch_all_to_all_v are supposed to share same length.");
 
     unsigned long long in_offset = 0, out_offset = 0;
     for (int i = 0; i < shared_world_size; ++i) {
@@ -573,16 +540,16 @@ static void batch_all_gather_v(const std::vector<torch::Tensor> &ins, const std:
 
   auto out_sizes_cpu = out_sizes_.to(torch::kCPU).to(torch::kInt64);
   auto* out_sizes = (unsigned long long*)out_sizes_cpu.data_ptr();
-  auto stream = at::cuda::getCurrentCUDAStream();
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
 
   for (int k = 0; k < ins.size(); ++k) {
     ncclGroupStart();
     auto* in_buff = ins[k].data_ptr();
     auto* out_buff = outs[k].data_ptr();
     auto dtype = ins[k].dtype();
-    int size = __dtype_size[*(unsigned short*)&dtype];
+    int size = torch::elementSize(torch::typeMetaToScalarType(dtype));
     AT_ASSERTM(size > 0, "Data type of input tensors for batch_all_gather_v are not recognized.");
-    AT_ASSERTM(k == 0 || ins[0].numel() == ins[k].numel(), "Tensor instances within batch_all_gather_v are supposed to share same length.");
+    AT_ASSERTM(k == 0 || ins[0].numel() == ins[k].numel(), "Tensors within batch_all_gather_v are supposed to share same length.");
 
     unsigned long long out_offset = 0;
     for (int i = 0; i < shared_world_size; ++i) {
@@ -1121,7 +1088,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_r
   CHECK_EQ(x.dtype(), torch::kBFloat16);
   CHECK_EQ(x.dim(), 3);
   CHECK_EQ(x.size(-1), 2112);
-  CHECK_EQ(cos_sin.dtype(), torch::kFloat32);
+  CHECK_EQ(cos_sin.dtype(), torch::kInt64);
   CHECK_EQ(positions.dtype(), torch::kInt64);
 
   int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
@@ -1129,7 +1096,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_r
 
   auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
   auto v_output = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
-  auto k_output = antares::ops::call("rope_k_bf16", {v_output.view({samples, 16, 32}), cos_sin, x.view({samples, 33, 32, 2}), positions}, {}).view({batch, seqlen, 576});
+  auto k_output = antares::ops::call("rope_kt_bf16", {v_output.view({-1, 8, 64}).view(torch::kInt32), cos_sin, x.view({-1, 33, 64}).view(torch::kInt32), positions}, {}).view(torch::kBFloat16).view({batch, seqlen, 576});
 
   auto &w_q_b_proj = q_b_proj;
   CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
@@ -1144,51 +1111,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_r
   auto buffer = q_output.flatten(0, 1).transpose(0, 1).narrow(-1, 0, 512);
   torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj);
 
-  antares::ops::call("rope_q_bf16_put", {cos_sin.view(torch::kInt64), qh.view({qh.size(0), n_local_heads, 3, 16, 2, 2}), positions, q_output.view({qh.size(0), n_local_heads, 9, 2, 32}).view(torch::kInt32)}, {});
+  antares::ops::call("rope_qt_bf16_put", {cos_sin, qh.view({qh.size(0), -1, 3, 64}).view(torch::kInt32), positions, q_output.view({qh.size(0), -1, 9, 64}).view(torch::kInt32)}, {});
   return {q_output, k_output, v_output};
-}
-
-
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16(
-  const torch::Tensor &qkv_act,
-  const torch::Tensor &cos_sin,
-  const torch::Tensor &positions,
-  const torch::Tensor &q_a_norm,
-  const torch::Tensor &kv_a_norm,
-  const torch::Tensor &q_b_proj,
-  const torch::Tensor &k_b_proj,
-  int64_t n_local_heads
-) {
-  auto x = qkv_act;
-  CHECK_CUDA(x);
-  CHECK_EQ(x.dtype(), torch::kBFloat16);
-  CHECK_EQ(x.dim(), 3);
-  CHECK_EQ(x.size(-1), 2112);
-  CHECK_EQ(cos_sin.dtype(), torch::kFloat32);
-  CHECK_EQ(positions.dtype(), torch::kInt64);
-
-  int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
-
-  auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
-  auto kv = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
-  auto k_output = antares::ops::call("rope_k_bf16", {kv.view({batch * seqlen, 16, 32}), cos_sin, x.view({batch * seqlen, 33, 32, 2}), positions}, {}).view({batch, seqlen, 576});
-
-  auto &w_q_b_proj = q_b_proj;
-  CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
-  CHECK_EQ(w_q_b_proj.dim(), 4);
-  CHECK_EQ(k_b_proj.dtype(), torch::kBFloat16);
-  CHECK_EQ(k_b_proj.dim(), 3);
-  CHECK_CONTIGUOUS(k_b_proj.transpose(1, 2));
-
-  auto qh = ((batch * seqlen <= 4) ? \
-    antares::ops::call("gmv_bf16", {w_q_b_proj.view({-1, w_q_b_proj.size(-1)}).view(torch::kInt32), q.view({batch * seqlen, q.size(2)}).view(torch::kInt32)}, {}) : \
-    torch::matmul(w_q_b_proj, q.view({batch * seqlen, q.size(2)}).t())).view({2, n_local_heads, 128, batch * seqlen});
-  auto q_output = (batch * seqlen == 1) ? \
-    antares::ops::call("bmv_bf16", {qh[0].squeeze(-1).view(torch::kInt32), k_b_proj.transpose(1, 2).view(torch::kInt32)}, {}).unsqueeze(1) : (batch * seqlen <= 4 ? \
-    antares::ops::call("bmm_bf16", {qh[0], k_b_proj.transpose(1, 2)}, {}) : torch::matmul(qh[0].transpose(1, 2), k_b_proj));
-
-  q_output = antares::ops::call("rope_q_bf16", {q_output.view({n_local_heads, batch * seqlen, 16, 32}), cos_sin, qh[1].view({n_local_heads, 2, 32, 2, batch * seqlen}), positions}, {}).view({batch, seqlen, n_local_heads, 576});
-  return {q_output, k_output, kv};
 }
 
 torch::Tensor warp_deepseek_r1_attn_f16xf8_block_scal(
@@ -1311,6 +1235,7 @@ namespace {
   torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
 
   torch::Tensor build_dict;
+  std::tuple<torch::Tensor, torch::Tensor> buffer, sigp;
   std::vector<torch::Tensor> ffn_gateup_s;
   std::vector<torch::Tensor> ffn_down_s;
   std::vector<torch::Tensor> ffn_gateup_scals;
@@ -1321,6 +1246,65 @@ namespace {
   std::vector<torch::Tensor> ffn_down_w_scals;
 }
 
+
+std::tuple<torch::Tensor, torch::Tensor> uncached_empty(torch::IntArrayRef shape, at::ScalarType dtype) {
+  int64_t size = std::accumulate(shape.begin(), shape.end(), 1LL, std::multiplies<int64_t>()) * torch::elementSize(dtype);
+
+  auto device_index = c10::cuda::current_device();
+  at::DeviceGuard device_guard(at::Device(at::DeviceType::CUDA, device_index));
+  void* buffer = nullptr;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  auto stream = c10::cuda::getCurrentCUDAStream().stream();
+  AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+
+#if defined(USE_ROCM)
+  AT_CUDA_CHECK(hipExtMallocWithFlags((void**)&buffer, size, hipDeviceMallocUncached));
+#else
+  AT_CUDA_CHECK(cudaMalloc((void**)&buffer, size));
+#endif
+  AT_CUDA_CHECK(cudaMemsetAsync(buffer, 0, size, stream));
+  AT_CUDA_CHECK(cudaStreamSynchronize(stream));
+  AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  auto t = torch::from_blob(buffer, shape, torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+
+  auto options = torch::TensorOptions().dtype(torch::kUInt8);
+  auto handle = torch::empty({static_cast<int64_t>(sizeof(cudaIpcMemHandle_t))}, options.device(torch::kCPU));
+  AT_CUDA_CHECK(cudaIpcGetMemHandle((cudaIpcMemHandle_t*)handle.data_ptr(), buffer));
+  handle = handle.to(torch::kCUDA).unsqueeze(0);
+  auto all_handles = torch::empty({shared_world_size, static_cast<int64_t>(sizeof(cudaIpcMemHandle_t))}, options.device(torch::kCUDA));
+  ncclAllGather(handle.data_ptr(), all_handles.data_ptr(), handle.numel(), ncclInt8, (ncclComm_t)shared_nccl_comm, stream);
+  all_handles = all_handles.to(torch::kCPU);
+
+  auto pointers = torch::empty({shared_world_size}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+  for (int i = 0; i < shared_world_size; ++i) {
+    if (i == shared_world_rank)
+      pointers[i] = reinterpret_cast<int64_t>(buffer);
+    else {
+      void* ipc_ptr = nullptr;
+      AT_CUDA_CHECK(cudaIpcOpenMemHandle(
+        (void**)&ipc_ptr, *((const cudaIpcMemHandle_t*)all_handles[i].data_ptr()),
+        cudaIpcMemLazyEnablePeerAccess));
+      *((int64_t*)pointers[i].data_ptr()) = reinterpret_cast<int64_t>(ipc_ptr);
+    }
+  }
+  return std::make_tuple(t, pointers.to(torch::kCUDA));
+}
+
+static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
+  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
+  CHECK_EQ(t.dtype(), torch::kBFloat16);
+
+  static torch::Tensor buffer_in, buffer_out;
+  if (buffer_in.numel() == 0) {
+    buffer_in = torch::empty_like(x);
+    buffer_out = torch::empty_like(x);
+  }
+
+  antares::ops::call("div_add_out", {x.view(-1).view(torch::kInt32), t.view(-1).view(torch::kInt32), buffer_in.view(-1).view(torch::kInt32)}, {}, false, 0, 2);
+  auto stream = at::cuda::getCurrentCUDAStream().stream();
+  ncclAllReduce(buffer_in.data_ptr(), buffer_out.data_ptr(), buffer_in.numel(), ncclBfloat16, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
+  return buffer_out;
+}
 
 torch::Tensor warp_shared_expert_f16xf8(
   const torch::Tensor &x,
@@ -1563,6 +1547,7 @@ void warp_deepseek_r1_prepare_weights_v2(
   ::weight_classify = weight_classify,
   ::cos_sin = cos_sin;
   ::build_dict = antares::ops::call("build_dict_f32", {cos_sin}, {});
+  ::sigp = uncached_empty({1}, torch::kInt32);
 
   int n_layers = o_projs.size();
   bool use_lora = getenv("LORA") ? (std::atoi(getenv("LORA")) == 1) : true;
@@ -1685,25 +1670,25 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("sparse_bmm_infer", warp_sparse_bmm_infer);
 
 #if defined(USE_NCCL)
-  m.def("gemm_nt_bf16xfp8_block_scal", warp_gemm_nt_bf16xfp8_block_scal);
+  m.def("test_allreduce_bf16", warp_test_allreduce_bf16);
+  m.def("uncached_empty", uncached_empty);
 
-  m.def("test_allreduce_bf16", &warp_test_allreduce_bf16);
-  m.def("bcast_index", &warp_nccl_bcast);
-  m.def("nccl_bcast", &warp_nccl_bcast);
+  m.def("gemm_nt_bf16xfp8_block_scal", warp_gemm_nt_bf16xfp8_block_scal);
+  m.def("bcast_index", warp_nccl_bcast);
+  m.def("nccl_bcast", warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
-  m.def("x_add_allreduce_y_f16", &warp_x_add_allreduce_y_f16);
+  m.def("x_add_allreduce_y_f16", warp_x_add_allreduce_y_f16);
   m.def("deepseek_r1_attn_f16xf8_block_scal", warp_deepseek_r1_attn_f16xf8_block_scal);
   m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
   m.def("deepseek_r1_prepare_weights_v2", warp_deepseek_r1_prepare_weights_v2);
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
-  m.def("multi_head_latent_rope_bf16", warp_multi_head_latent_rope_bf16);
   m.def("multi_head_latent_rope_bf16_v2", warp_multi_head_latent_rope_bf16_v2);
+  m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
 
   m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
   m.def("to_bfloat16", warp_to_bfloat16);
   m.def("to_float32", warp_to_float32);
-  m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_f16xf8_block_scal);
 
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_f16xf8_block_scal_16x16_fnuz);
 #endif

@@ -7,7 +7,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported CPU: fp64/fp32
 
 #### - ***The First to Support DeepSeek 671B NVFP4 Inference using A100/A800/H100/MI300 resources.***
-#### - ***Fastest "Thinking" on MI300X: Complete a 4K reasoning answering in 39 sec, compared with SGLANG in 1 min 35 sec.***
+#### - ***Fastest "Thinking" on MI300X: Complete a 4K reasoning answer in 39 sec, compared with SGLANG in 1 min 35 sec.***
 
 ## What's New:
 
@@ -32,15 +32,15 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### FP4 Dataset: nvidia/DeepSeek-R1-FP4
 |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 |  ----  | ----  | ----  | ----  |
-| $"A100 \times 8" or "A800 \times 8"$ | Not Supported | Not Supported | 57 Decoding TPS for bsz = 1 |
-| $"H100 \times 8" or "H800 \times 8"$ | Not Supported | Not Supported | 81 Decoding TPS for bsz = 1 |
-| $MI300 \times 8$  | Not Supported | Not Supported | 96 Decoding TPS for bsz = 1 |
+| $"A100 \times 8" or "A800 \times 8"$ | Not Supported | Not Supported | 57 Decode TPS for bsz = 1 |
+| $"H100 \times 8" or "H800 \times 8"$ | Not Supported | Not Supported | 81 Decode TPS for bsz = 1 |
+| $MI300 \times 8$  | Not Supported | Not Supported | 96 Decode TPS for bsz = 1 |
 
 #### FP8 Dataset: deepseek-ai/DeepSeek-R1 or deepseek-ai/DeepSeek-V3-0324
 |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 |  ----  | ----  | ----  | ----  |
 | $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
-| $MI300 \times 8$  | Not Supported | 42 Decoding TPS for bsz = 1 | 105 Decoding TPS for bsz = 1 |
+| $MI300 \times 8$  | Not Supported | 42 Decode TPS for bsz = 1 | 105 Decode TPS for bsz = 1 |
 
 
 - Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8:
