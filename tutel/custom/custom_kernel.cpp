@@ -1234,7 +1234,6 @@ namespace {
   std::vector<torch::Tensor> o_proj_scals;
   torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
 
-  torch::Tensor build_dict;
   std::tuple<torch::Tensor, torch::Tensor> buffer, sigp;
   std::vector<torch::Tensor> ffn_gateup_s;
   std::vector<torch::Tensor> ffn_down_s;
@@ -1339,7 +1338,6 @@ torch::Tensor warp_glu_expert_f16xf4_scal(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
   const torch::Tensor &expert_weight,
-  const torch::Tensor &build_dict,
   const torch::Tensor &gateup_w,
   const torch::Tensor &gateup_s,
   const torch::Tensor &gateup_i,
@@ -1352,8 +1350,8 @@ torch::Tensor warp_glu_expert_f16xf4_scal(
   CHECK_EQ(x.dim(), 3);
   int samples = x.size(0) * x.size(1), model_dim = x.size(2);
   int select_size = expert_ids.numel();
-  auto y = antares::ops::call("fmoe_f16xf4_stage_1", {x.view({samples, model_dim}).view(torch::kInt32), build_dict, gateup_s, expert_ids.view({select_size}), gateup_m, gateup_w}, {}).view({select_size, -1});
-  y = antares::ops::call("fmoe_f16xf4_stage_2", {y.view({samples, expert_ids.size(1), 2, -1}).view(torch::kInt32), build_dict, down_s, expert_ids, expert_weight, down_m, down_w}, {});
+  auto y = antares::ops::call("fmoe_f16xf4_phase_1", {x.view({samples, -1, 16}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat64)}, {}).view({select_size, -1});
+  y = antares::ops::call("fmoe_f16xf4_phase_2", {y.view({samples, expert_ids.size(1), 2, -1, 16}).view(torch::kInt32), down_s, down_m, expert_ids, expert_weight, down_w.view(torch::kFloat64)}, {});
   return y;
 }
 
@@ -1546,8 +1544,7 @@ void warp_deepseek_r1_prepare_weights_v2(
   ::token_emb = token_emb,
   ::weight_classify = weight_classify,
   ::cos_sin = cos_sin;
-  ::build_dict = antares::ops::call("build_dict_f32", {cos_sin}, {});
-  ::sigp = uncached_empty({1}, torch::kInt32);
+  ::sigp = uncached_empty({1}, topk_exp_id.dtype().toScalarType());
 
   int n_layers = o_projs.size();
   bool use_lora = getenv("LORA") ? (std::atoi(getenv("LORA")) == 1) : true;
@@ -1604,12 +1601,12 @@ torch::Tensor warp_deepseek_r1_forward(
       xb = warp_rmsnorm_bf16(x, rms_ffn_ws[l], 1e-6f);
       if (ffn_gateup_s.size() > 0) {
         if (l < 3) {
-          xb = warp_glu_expert_f16xf4_scal(xb, shared_exp_id, shared_weights, build_dict, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
+          xb = warp_glu_expert_f16xf4_scal(xb, shared_exp_id, shared_weights, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
         } else {
           CHECK_EQ(topk_exp_id.dim(), 2);
           auto logits_bf16 = antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {});
           warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, gate_biases[l - 3], score_weight, topk_exp_id);
-          xb = warp_glu_expert_f16xf4_scal(xb, topk_exp_id, score_weight, build_dict, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
+          xb = warp_glu_expert_f16xf4_scal(xb, topk_exp_id, score_weight, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
         }
       } else {
         if (l < 3) {
