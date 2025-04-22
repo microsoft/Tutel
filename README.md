@@ -41,8 +41,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
         tutelgroup/deepseek-671b:h100x8-chat-20250401 --model_path ./nvidia/DeepSeek-R1-FP4 \
         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 
-   ## For MI300 NVFP4 (x8):
-   docker run -it --rm --ipc=host --privileged -p 8000:8000 -v /:/host -w /host$(pwd) \
+    # For MI300 NVFP4 (x8):
+    docker run -it --rm --ipc=host --privileged -p 8000:8000 -v /:/host -w /host$(pwd) \
         --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 \
         tutelgroup/deepseek-671b:mi300x8-chat-20250422 --model_path ./nvidia/DeepSeek-R1-FP4 \
         --prompt "Calculate the indefinite integral of 1/sin(x) + x"

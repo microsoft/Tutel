@@ -1025,7 +1025,7 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const tor
 
   CHECK_EQ(scal.dim(), 2);
   if (samples < 4)
-    return antares::ops::call("gemv_nt_bf16xfp8_block", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(torch::kInt16), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
+    return antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(at::kComplexDouble), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
 
   torch::Tensor w_ = w;
 
@@ -1668,17 +1668,6 @@ torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16_fnuz(
   return yb;
 }
 
-torch::Tensor warp_glu_expert_f16xf8_block_scal_16x16_fnuz_bs4(
-  const torch::Tensor &x,
-  const torch::Tensor &expert_ids,
-  const torch::Tensor &expert_weight,
-  const torch::Tensor &moe_gate_up_w,
-  const torch::Tensor &moe_gate_up_s,
-  const torch::Tensor &moe_down_w,
-  const torch::Tensor &moe_down_s) {
-  return warp_glu_expert_f16xf8_block_scal_16x16_fnuz(x, expert_ids, expert_weight, moe_gate_up_w, moe_gate_up_s, moe_down_w, moe_down_s);
-}
-
 #endif
 
 TORCH_LIBRARY(tutel_ops, m) {
@@ -1707,7 +1696,6 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("to_float32", warp_to_float32);
 
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_f16xf8_block_scal_16x16_fnuz);
-  m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz_bs4u8", warp_glu_expert_f16xf8_block_scal_16x16_fnuz_bs4);
 #endif
 }
 #endif
