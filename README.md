@@ -3,15 +3,28 @@
 Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors.
 
 - Supported Framework: Pytorch (recommend: >= 1.10)
-- Supported GPUs: CUDA(fp64/fp32/fp16/bfp16), ROCm(fp64/fp32/fp16)
+- Supported GPUs: CUDA(fp64/fp32/fp16/bf16), ROCm(fp64/fp32/fp16/bf16)
 - Supported CPU: fp64/fp32
 
 #### - ***The First to Support DeepSeek 671B NVFP4 Inference using A100/A800/H100/MI300 resources.***
 #### - ***Fastest "Thinking" on MI300X: Complete a 4K reasoning answer in 39 sec, compared with SGLANG in 1 min 35 sec.***
 
+#### FP4 Model: [nvidia/DeepSeek-R1-FP4](https://huggingface.co/nvidia/DeepSeek-R1-FP4)
+|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
+|  ----  | ----  | ----  | ----  |
+| $"A100 \times 8" or "A800 \times 8"$ | Not Supported | Not Supported | 57 Decode TPS for bsz = 1 |
+| $"H100 \times 8" or "H800 \times 8"$ | Not Supported | Not Supported | 81 Decode TPS for bsz = 1 |
+| $MI300 \times 8$  | Not Supported | Not Supported | 107 Decode TPS for bsz = 1 |
+
+#### FP8 Model: [deepseek-ai/DeepSeek-R1](https://huggingface.co/deepseek-ai/DeepSeek-R1) (or [deepseek-ai/DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324))
+|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
+|  ----  | ----  | ----  | ----  |
+| $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
+| $MI300 \times 8$  | Not Supported | 42 Decode TPS for bsz = 1 | 110 Decode TPS for bsz = 1 |
+
 ## What's New:
 
-- Tutel v0.4.2: Support R1-FP4 for "NVIDIA A100/A800/H100/H800 (80G) x 8":
+- Tutel v0.4.2: Add R1-FP4 for "NVIDIA A100/A800/H100/H800 (80G) x 8" and "AMD MI300 x 8":
 ```sh
   >> Example:
     huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
@@ -20,28 +33,20 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
     docker run -it --rm --ipc=host --privileged -p 8000:8000 \
         --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
         tutelgroup/deepseek-671b:a100x8-chat-20250401 --model_path ./nvidia/DeepSeek-R1-FP4 \
-        --prompt "求1/sin(x) + x的不定积分"
+        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 
     # For H100/H800 (80G x 8):
     docker run -it --rm --ipc=host --privileged -p 8000:8000 \
         --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
         tutelgroup/deepseek-671b:h100x8-chat-20250401 --model_path ./nvidia/DeepSeek-R1-FP4 \
-        --prompt "求1/sin(x) + x的不定积分"
+        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+
+   ## For MI300 NVFP4 (x8):
+   docker run -it --rm --ipc=host --privileged -p 8000:8000 -v /:/host -w /host$(pwd) \
+        --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 \
+        tutelgroup/deepseek-671b:mi300x8-chat-20250422 --model_path ./nvidia/DeepSeek-R1-FP4 \
+        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 ```
-
-#### FP4 Dataset: nvidia/DeepSeek-R1-FP4
-|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
-|  ----  | ----  | ----  | ----  |
-| $"A100 \times 8" or "A800 \times 8"$ | Not Supported | Not Supported | 57 Decode TPS for bsz = 1 |
-| $"H100 \times 8" or "H800 \times 8"$ | Not Supported | Not Supported | 81 Decode TPS for bsz = 1 |
-| $MI300 \times 8$  | Not Supported | Not Supported | 96 Decode TPS for bsz = 1 |
-
-#### FP8 Dataset: deepseek-ai/DeepSeek-R1 or deepseek-ai/DeepSeek-V3-0324
-|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
-|  ----  | ----  | ----  | ----  |
-| $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
-| $MI300 \times 8$  | Not Supported | 42 Decode TPS for bsz = 1 | 105 Decode TPS for bsz = 1 |
-
 
 - Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8:
 ```sh
