@@ -100,10 +100,10 @@ def perform(fn, num_runs=100):
     return max(cost, 1e-6)
 
 
-def from_url(link):
+def from_url(link, path=None):
   import requests
   import tempfile
-  file_name = tempfile.mktemp()
+  file_name = path or tempfile.mktemp()
 
   if not os.path.exists(file_name) and link is not None:
     dirname = os.path.dirname(file_name) or '.'

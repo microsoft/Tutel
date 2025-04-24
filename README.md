@@ -12,15 +12,15 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### FP4 Model: [nvidia/DeepSeek-R1-FP4](https://huggingface.co/nvidia/DeepSeek-R1-FP4)
 |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 |  ----  | ----  | ----  | ----  |
-| $"A100 \times 8" or "A800 \times 8"$ | Not Supported | Not Supported | 57 Decode TPS for bsz = 1 |
-| $"H100 \times 8" or "H800 \times 8"$ | Not Supported | Not Supported | 81 Decode TPS for bsz = 1 |
-| $MI300 \times 8$  | Not Supported | Not Supported | 107 Decode TPS for bsz = 1 |
+| $"A100 \times 8" or "A800 \times 8"$ | N/A | N/A | 63 Generation TPS (bsz = 1) |
+| $"H100 \times 8" or "H800 \times 8"$ | N/A | N/A | 81 Generation TPS (bsz = 1) |
+| $MI300 \times 8$  | N/A | N/A | 112 Generation TPS (bsz = 1) |
 
-#### FP8 Model: [deepseek-ai/DeepSeek-R1](https://huggingface.co/deepseek-ai/DeepSeek-R1) (or [deepseek-ai/DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324))
+#### FP8 Model: [DeepSeek-R1](https://huggingface.co/deepseek-ai/DeepSeek-R1) or [DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324) or [DeepSeek-Prover-V2-671B](https://huggingface.co/deepseek-ai/DeepSeek-Prover-V2-671B)
 |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 |  ----  | ----  | ----  | ----  |
 | $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
-| $MI300 \times 8$  | Not Supported | 42 Decode TPS for bsz = 1 | 110 Decode TPS for bsz = 1 |
+| $MI300 \times 8$  | N/A | 42 Generation TPS (bsz = 1) | 110 Generation TPS (bsz = 1) |
 
 ## What's New:
 
@@ -29,34 +29,21 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
   >> Example:
     huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
 
-    # For A100/A800 (80G x 8):
-    docker run -it --rm --ipc=host --privileged -p 8000:8000 \
-        --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
-        tutelgroup/deepseek-671b:a100x8-chat-20250401 --model_path ./nvidia/DeepSeek-R1-FP4 \
+    # For A100/A800/H100/H800/H20 (80G x 8):
+    docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
+        --gpus=all -v /:/host -w /host$(pwd) \
+        tutelgroup/deepseek-671b:a100x8-chat-20250428 --model_path ./nvidia/DeepSeek-R1-FP4 \
         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 
-    # For H100/H800 (80G x 8):
-    docker run -it --rm --ipc=host --privileged -p 8000:8000 \
-        --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
-        tutelgroup/deepseek-671b:h100x8-chat-20250401 --model_path ./nvidia/DeepSeek-R1-FP4 \
-        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
-
-    # For MI300 NVFP4 (x8):
-    docker run -it --rm --ipc=host --privileged -p 8000:8000 -v /:/host -w /host$(pwd) \
-        --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 \
-        tutelgroup/deepseek-671b:mi300x8-chat-20250422 --model_path ./nvidia/DeepSeek-R1-FP4 \
+    # For AMD MI300 NVFP4 (192G x 8):
+    docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
+        --device=/dev/kfd --device=/dev/dri --group-add=video --ipc=host --cap-add=SYS_PTRACE \
+        --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
+        tutelgroup/deepseek-671b:mi300x8-chat-20250428 --model_path ./nvidia/DeepSeek-R1-FP4 \
         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 ```
 
-- Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8:
-```sh
-  >> Example:
-    huggingface-cli download deepseek-ai/DeepSeek-V3-0324 --local-dir ./deepseek-ai/DeepSeek-V3-0324
-
-    docker run -it --rm --ipc=host --privileged -p 8000:8000 \
-        -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-chat-20250319 \
-        --model_path ./deepseek-ai/DeepSeek-V3-0324 --prompt "Calculate the result of: 1 / (sqrt(5) - sqrt(3))"
-```
+- Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8.
 
 - Tutel v0.4.0: Accelerating Deepseek R1 Full-precision-Chat for AMD MI300x8 (more platform support will be added in later versions):
 ```sh

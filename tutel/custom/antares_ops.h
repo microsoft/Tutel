@@ -206,10 +206,12 @@ at::Tensor call(const void *key, const std::vector<at::Tensor> &ts, const std::v
 
   std::vector<void*> krnl_args;
   for (int i = 0; i < ts.size(); ++i) {
+#if !defined(__aarch64__)
     if (ts[i].device().type() != ANTARES_DEV) {
-      std::string error_msg = "\nThe " + std::to_string(i + 1) + "-th argument of `antares.ops." + prop.name + "(...)`is not a CUDA tensor.";
+      std::string error_msg = "\nThe " + std::to_string(i + 1) + "-th argument of `antares.ops." + prop.name + "(...)` is not a CUDA tensor.";
       AT_ASSERTM(0, error_msg);
     }
+#endif
     if (!allow_non_contiguous)
       AT_ASSERTM(ts[i].is_contiguous(), "Not contiguous tensor for custom kernel");
     krnl_args.push_back((void*)ts[i].data_ptr());
