@@ -10,72 +10,55 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### - ***Fastest "Thinking" on MI300X: Complete a 4K reasoning answer in 39 sec, compared with SGLANG in 1 min 35 sec.***
 
 #### FP4 Model: [nvidia/DeepSeek-R1-FP4](https://huggingface.co/nvidia/DeepSeek-R1-FP4)
-|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
-|  ----  | ----  | ----  | ----  |
-| $"A100 \times 8" or "A800 \times 8"$ | N/A | N/A | 63 Generation TPS (bsz = 1) |
-| $"H100 \times 8" or "H800 \times 8"$ | N/A | N/A | 81 Generation TPS (bsz = 1) |
-| $MI300 \times 8$  | N/A | N/A | 112 Generation TPS (bsz = 1) |
+> |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
+> |  ----  | ----  | ----  | ----  |
+> | $"A100 \times 8" or "A800 \times 8"$ | N/A | N/A | 63 Generation TPS (bsz = 1) |
+> | $"H100 \times 8" or "H800 \times 8"$ | N/A | N/A | 81 Generation TPS (bsz = 1) |
+> | $MI300 \times 8$  | N/A | N/A | 112 Generation TPS (bsz = 1) |
 
 #### FP8 Model: [DeepSeek-R1](https://huggingface.co/deepseek-ai/DeepSeek-R1) or [DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324) or [DeepSeek-Prover-V2-671B](https://huggingface.co/deepseek-ai/DeepSeek-Prover-V2-671B)
-|  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
-|  ----  | ----  | ----  | ----  |
-| $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
-| $MI300 \times 8$  | N/A | 42 Generation TPS (bsz = 1) | 110 Generation TPS (bsz = 1) |
+> |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
+> |  ----  | ----  | ----  | ----  |
+> | $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
+> | $MI300 \times 8$  | N/A | 42 Generation TPS (bsz = 1) | 110 Generation TPS (bsz = 1) |
+
+#### Run DeepSeek 671B in Docker:
+```sh
+>> Example:
+  huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
+
+  # For A100/A800/H100/H800/H20/H200 (80G x 8):
+  docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all \
+      -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:a100x8-chat-20250508 \
+      --try_path ./nvidia/DeepSeek-R1-FP4 \
+      --serve --listen_port 8000 \
+      --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+
+  # For AMD MI300x NVFP4 (192G x 8):
+  docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
+      --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+      -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-chat-20250508 \
+      --try_path ./nvidia/DeepSeek-R1-FP4 \
+      --try_path ./deepseek-ai/DeepSeek-R1 \
+      --try_path ./deepseek-ai/DeepSeek-V3-0324 \
+      --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
+      --try_path ./microsoft/MAI-DS-R1 \
+      --serve --listen_port 8000 \
+      --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+```
 
 ## What's New:
 
-- Tutel v0.4.2: Add R1-FP4 for "NVIDIA A100/A800/H100/H800 (80G) x 8" and "AMD MI300 x 8":
-```sh
-  >> Example:
-    huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
+> Tutel v0.4.2: Add R1-FP4 for "NVIDIA A100/A800/H100/H800 (80G) x 8" and "AMD MI300 x 8":
 
-    # For A100/A800/H100/H800/H20 (80G x 8):
-    docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
-        --gpus=all -v /:/host -w /host$(pwd) \
-        tutelgroup/deepseek-671b:a100x8-chat-20250428 --model_path ./nvidia/DeepSeek-R1-FP4 \
-        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
-
-    # For AMD MI300 NVFP4 (192G x 8):
-    docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
-        --device=/dev/kfd --device=/dev/dri --group-add=video --ipc=host --cap-add=SYS_PTRACE \
-        --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
-        tutelgroup/deepseek-671b:mi300x8-chat-20250428 --model_path ./nvidia/DeepSeek-R1-FP4 \
-        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
-```
-
-- Tutel v0.4.1: Support fused MLA for R1/V3-0324 for AMD MI300x8.
-
-- Tutel v0.4.0: Accelerating Deepseek R1 Full-precision-Chat for AMD MI300x8 (more platform support will be added in later versions):
-```sh
-  >> Example:
-
-    # Step-1: Download Deepseek R1 671B Model
-    huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir ./deepseek-ai/DeepSeek-R1
-
-    # Step-2: Using 8 MI300 GPUs to Run Deepseek R1 Chat with Full Precision (PPL = 0)
-    docker run -it --rm --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --privileged \
-        -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-fp16xfp8 \
-        --model_path ./deepseek-ai/DeepSeek-R1 \
-        --prompt "Calculate the result of: 1 / (sqrt(5) - sqrt(3))"
-
-    # Step-3: Using 8 MI300 GPUs to Serve Deepseek R1 Chat on Local Port :8000
-    docker run -it --rm --ipc=host --privileged -p 8000:8000 \
-        -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-chat-20250224 \
-        --model_path ./deepseek-ai/DeepSeek-R1
-
-    # Step-4: Issue a Prompt Request with curl
-    curl -X POST http://0.0.0.0:8000/chat -d '{"text": "求1/sin(x) + x的不定积分"}'
-
-```
-
-- Tutel v0.3.3: Add all-to-all benchmark:
+> Tutel v0.3.3: Add all-to-all benchmark:
 ```sh
   >> Example:
 
     python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.bandwidth_test --size_mb=256
 ```
 
-- Tutel v0.3.2: Add tensorcore option for extra benchmarks / Extend the example for custom experts / Allow NCCL timeout settings:
+> Tutel v0.3.2: Add tensorcore option for extra benchmarks / Extend the example for custom experts / Allow NCCL timeout settings:
 ```sh
   >> Example of using tensorcore:
 
@@ -93,7 +76,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ```
 
-- Tutel v0.3.1: Add NCCL all_to_all_v and all_gather_v for arbitrary-length message transfers:
+> Tutel v0.3.1: Add NCCL all_to_all_v and all_gather_v for arbitrary-length message transfers:
 ```sh
   >> Example:
     # All_to_All_v:
@@ -106,7 +89,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
     net.batch_all_gather_v([t_x_cuda, t_y_cuda, ..])
 ```
 
-- Tutel v0.3: Add Megablocks solution to improve decoder inference on single-GPU with num_local_expert >= 2:
+> Tutel v0.3: Add Megablocks solution to improve decoder inference on single-GPU with num_local_expert >= 2:
 ```sh
   >> Example (capacity_factor=0 required by dropless-MoE):
     # Using BatchMatmul:
@@ -120,7 +103,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
     self._moe_layer.forward(x, .., megablocks_size=1)         # Control the switch of megablocks_size (0 for disabled)
 ```
 
-- Tutel v0.2: Allow most configurations to be dynamic switchable with free cost:
+> Tutel v0.2: Allow most configurations to be dynamic switchable with free cost:
 ```sh
   >> Example:
     python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld_switch --batch_size=16
@@ -132,7 +115,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
     self._moe_layer.forward(x, .., top_k=1)                   # Control the switch of top_k sparsity
 ```
 
-- Tutel v0.1: Optimize the Einsum Complexity of Data Dispatch Encoding and Decoding, add 2DH option to deal with All-to-All at scale:
+> Tutel v0.1: Optimize the Einsum Complexity of Data Dispatch Encoding and Decoding, add 2DH option to deal with All-to-All at scale:
 ```sh
   >> Example (suggest enabling 2DH only at scale, note that the value of --nproc_per_node MUST equal to total physical GPU counts per node, e.g. 8 for A100x8):
     python3 -m torch.distributed.run --nproc_per_node=8 -m tutel.examples.helloworld --batch_size=16 --use_2dh
