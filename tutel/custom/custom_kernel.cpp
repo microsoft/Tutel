@@ -948,8 +948,8 @@ void perform(FN func, int num_runs = 1000) {
   printf("Perform: %g\n", ab::convertToElapsedTime(h1, h2) / num_runs);
 }
 
-void show(const std::vector<torch::Tensor> &xs) {
-  if (shared_world_rank != 0)
+void show(const std::vector<torch::Tensor> &xs, bool master_only = true) {
+  if (master_only && shared_world_rank != 0)
     return;
   puts("=======================");
   for (auto &x: xs) {
@@ -1277,10 +1277,10 @@ std::tuple<torch::Tensor, torch::Tensor> uncached_empty(torch::IntArrayRef shape
 #else
   AT_CUDA_CHECK(cudaMalloc((void**)&buffer, size));
 #endif
-  AT_CUDA_CHECK(cudaMemsetAsync(buffer, 0, size, stream));
   AT_CUDA_CHECK(cudaStreamSynchronize(stream));
   AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
   auto t = torch::from_blob(buffer, shape, torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+  t.zero_();
 
   auto options = torch::TensorOptions().dtype(torch::kUInt8);
   auto handle = torch::empty({static_cast<int64_t>(sizeof(cudaIpcMemHandle_t))}, options.device(torch::kCPU));
@@ -1311,10 +1311,20 @@ static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const to
 
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
   CHECK_EQ(t.dtype(), torch::kBFloat16);
-  static torch::Tensor t_out = torch::empty_like(x);
   auto stream = at::cuda::getCurrentCUDAStream().stream();
+#if 1
+  auto buf = std::get<0>(buffer).flatten();
+  buf.copy_(t.flatten());
+  antares::ops::call("sig_wait", {std::get<0>(sigp), std::get<1>(sigp)}, {});
+  if (shared_world_size == 8)
+    return antares::ops::call("sig_sum_bf16_u8", {x.flatten().view(torch::kInt32), std::get<1>(buffer)}, {}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
+  CHECK_EQ(shared_world_size, 4);
+  return antares::ops::call("sig_sum_bf16_u4", {x.flatten().view(torch::kInt32), std::get<1>(buffer)}, {}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
+#else
+  static torch::Tensor t_out = torch::empty_like(x);
   ncclAllReduce(t.data_ptr(), t_out.data_ptr(), t.numel(), ncclBfloat16, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
   return x + t_out;
+#endif
 }
 
 torch::Tensor warp_shared_expert_f16xf8(
@@ -1468,6 +1478,8 @@ void warp_deepseek_r1_prepare_weights(
   ::token_emb = token_emb,
   ::weight_classify = weight_classify,
   ::cos_sin = cos_sin;
+  ::sigp = uncached_empty({1}, torch::kInt32);
+  ::buffer = uncached_empty({batch, token_emb.size(-1)}, torch::kBFloat16);
 
   int n_layers = o_projs.size();
   bool use_lora = getenv("LORA") ? (std::atoi(getenv("LORA")) == 1) : true;
@@ -1555,7 +1567,8 @@ void warp_deepseek_r1_prepare_weights_v2(
   ::token_emb = token_emb,
   ::weight_classify = weight_classify,
   ::cos_sin = cos_sin;
-  ::sigp = uncached_empty({1}, topk_exp_id.dtype().toScalarType());
+  ::sigp = uncached_empty({1}, torch::kInt32);
+  ::buffer = uncached_empty({batch, token_emb.size(-1)}, torch::kBFloat16);
 
   int n_layers = o_projs.size();
   bool use_lora = getenv("LORA") ? (std::atoi(getenv("LORA")) == 1) : true;
