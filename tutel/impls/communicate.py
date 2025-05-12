@@ -40,6 +40,19 @@ TUTEL_SHARED_NCCL = False
 TUTEL_SKIP_A2A = int(os.environ.get('SKIP_A2A', 0)) > 0
 TUTEL_SUBGROUP_CACHE = {}
 
+def init_extern_nccl():
+    world_size = get_world_size()
+    world_rank = get_world_rank()
+    nccl_unique_id_size = tutel_custom_kernel.get_nccl_unique_id_size()
+    nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
+    if world_rank == 0:
+        tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
+    try:
+        nccl_unique_id = simple_broadcast(nccl_unique_id, 0)
+    except:
+        nccl_unique_id = simple_broadcast(nccl_unique_id.cuda(), 0)
+    tutel_custom_kernel.init_shared_nccl(nccl_unique_id.cpu(), world_size, world_rank)
+
 def create_standalone_group():
     try:
         return dist.new_group(ranks=[get_world_rank()])
@@ -82,6 +95,7 @@ def create_groups_from_world(group_count, include_init=None, parent_group=None):
           if glob_world_rank == 0:
               print(*args)
     except ValueError:
+        assert int(os.environ.get('WORLD_SIZE', 1)) == 1, "Failed to initialize distributed session"
         glob_world_size, glob_world_rank, dist_local_rank = 1, 0, 0
         is_distributed = False
         dist_print = print
@@ -121,6 +135,8 @@ def create_groups_from_world(group_count, include_init=None, parent_group=None):
 
     result.global_size = glob_world_size
     result.global_rank = glob_world_rank
+    result.local_rank = dist_local_rank
+    result.local_size = int(os.environ.get('LOCAL_WORLD_SIZE', 1))
 
     result.group_count = dist_group_size
     result.data_rank = dist_group_rank
@@ -148,27 +164,23 @@ def create_groups_from_world(group_count, include_init=None, parent_group=None):
     global TUTEL_SHARED_NCCL
     if is_distributed and not TUTEL_SHARED_NCCL and backend == 'nccl':
         try:
-            world_size = get_world_size()
-            world_rank = get_world_rank()
-            nccl_unique_id_size = tutel_custom_kernel.get_nccl_unique_id_size()
-            nccl_unique_id = torch.zeros([nccl_unique_id_size], dtype=torch.int8).cpu()
-            if world_rank == 0:
-                tutel_custom_kernel.get_nccl_unique_id(nccl_unique_id)
-            nccl_unique_id = nccl_unique_id.cuda()
-            dist.broadcast(nccl_unique_id, 0, None)
-            tutel_custom_kernel.init_shared_nccl(
-                nccl_unique_id.cpu(),
-                world_size,
-                world_rank)
-            TUTEL_SHARED_NCCL = True
+            init_extern_nccl()
         except:
             pass
 
     TUTEL_GROUPING_CACHE[original_group_count] = result
     return result
 
+
 def swap_axis(t, x, y):
     return t if x == y else t.swapaxes(x, y)
+
+def simple_broadcast(input, src=0, group=None):
+    world_size = get_world_size(group)
+    if world_size == 1:
+        return input
+    dist.broadcast(input, src=src, group=group)
+    return input
 
 def simple_all_reduce(input, group=None, op=torch.distributed.ReduceOp.SUM, inplace=False):
     world_size = get_world_size(group)
