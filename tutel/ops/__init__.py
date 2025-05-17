@@ -5,8 +5,14 @@ import os
 import torch
 import tutel_custom_kernel
 
+from torch.utils.cpp_extension import IS_HIP_EXTENSION
+
 if 'OP_LOADER' not in os.environ:
-    os.environ['OP_LOADER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.')
+    if not IS_HIP_EXTENSION:
+        suffix = 'cuda'
+    else:
+        suffix = 'rocm'
+    os.environ['OP_LOADER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), suffix)
 
 def input_to_float8(
     x: torch.Tensor, dim=-1, dtype: torch.dtype = torch.float8_e4m3fn, max_scale=None
@@ -24,4 +30,8 @@ def input_to_float8(
     x_scl_sat.scale_inv = scale.float().reciprocal().squeeze(dim)
     # x_scl_sat.scale_mean = sum_val.squeeze(dim)
     return x_scl_sat
+
+@torch.compiler.disable(recursive=True)
+def __getattr__(name):
+    return getattr(torch.ops.tutel_ops, name)
 
