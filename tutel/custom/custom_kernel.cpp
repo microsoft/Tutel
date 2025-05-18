@@ -1325,7 +1325,7 @@ static void configure_buffers(const std::tuple<torch::Tensor, torch::Tensor> &si
   ::buffer = buffer;
 }
 
-static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
+static torch::Tensor warp_x_add_allreduce_y_bf16(const torch::Tensor &x, const torch::Tensor &t) {
   CHECK_EQ(t.dtype(), torch::kBFloat16);
   if (get_world_size() == 1)
     return x + t;
@@ -1380,7 +1380,7 @@ torch::Tensor warp_shared_expert_bf16xf8(
     return xb.view({x.size(0), x.size(1), moe_down_w.size(1)});
 }
 
-torch::Tensor warp_glu_expert_f16xf4_scal(
+torch::Tensor warp_glu_expert_bf16xf4_group_scal(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
   const torch::Tensor &expert_weight,
@@ -1409,8 +1409,7 @@ torch::Tensor warp_glu_expert_bf16xf8_block_scal(
   const torch::Tensor &moe_gate_up_w,
   const torch::Tensor &moe_gate_up_s,
   const torch::Tensor &moe_down_w,
-  const torch::Tensor &moe_down_s,
-  int64_t policy = 0) {
+  const torch::Tensor &moe_down_s) {
 
   int model_dim = x.size(-1);
   int samples = x.numel() / model_dim;
@@ -1421,6 +1420,11 @@ torch::Tensor warp_glu_expert_bf16xf8_block_scal(
   CHECK_EQ(expert_ids.dim(), 2);
   CHECK_EQ(expert_weight.dim(), 2);
   CHECK_EQ(expert_ids.size(1), expert_weight.size(1));
+
+  if (samples == 1) {
+    auto xb = antares::ops::call("fmoe_f16xf8_blk128_phase_1", {x.view({samples, -1, 16}).view(torch::kInt32), expert_ids, moe_gate_up_w.view(at::kComplexDouble), moe_gate_up_s}, {});
+    return antares::ops::call("fmoe_f16xf8_blk128_phase_2", {xb.view({samples, expert_ids.size(1), 2, -1, 16}).view(torch::kInt32), expert_weight, expert_ids, moe_down_w.view(at::kComplexDouble), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
+  }
 
   if (moe_down_s.dim() == 2) {
     if (samples >= 4 && moe_gate_up_w.size(0) == 1)
@@ -1441,7 +1445,7 @@ torch::Tensor warp_glu_expert_bf16xf8_block_scal(
     }
   }
 
-  if (policy == 0) {
+  if (samples <= 4) {
     if (expert_ids.size(-1) == 9) {
       auto xb = antares::ops::call("fmoe_blkvect_phase_1", {x.view({samples, -1, 16}).view(torch::kInt32), expert_ids.flatten(), moe_gate_up_w.view(at::kComplexDouble), moe_gate_up_s}, {});
       return antares::ops::call("fmoe_blkvect_phase_2", {xb.view({samples, 9, -1, 16}).view(torch::kInt32), expert_weight, expert_ids, moe_down_w.view(at::kComplexDouble), moe_down_s}, {}).view({x.size(0), x.size(1), moe_down_w.size(1)});
@@ -1644,43 +1648,37 @@ void warp_deepseek_r1_forward(
     CHECK_CUDA(x);
     CHECK_EQ(x.dim(), 2);
     int samples = x.numel();
-    int policy = samples >= 4;
 
     x = token_emb.index_select(0, x.view({-1})).view({x.size(0), x.size(1), token_emb.size(1)});
     #pragma unroll
     for (int l = 0; l < rms_att_ws.size(); ++l) {
       auto xb = warp_rmsnorm_bf16(x, rms_att_ws[l], 1e-6f);
       xb = warp_deepseek_r1_attn_bf16xf8_block_scal(xb, key_cache[l], val_cache[l], cos_sin, qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], range, pos, n_local_heads);
-      x = warp_x_add_allreduce_y_f16(x, xb);
+      x = warp_x_add_allreduce_y_bf16(x, xb);
 
       xb = warp_rmsnorm_bf16(x, rms_ffn_ws[l], 1e-6f);
       if (ffn_gateup_s.size() > 0) {
         if (l < 3) {
-          xb = warp_glu_expert_f16xf4_scal(xb, shared_exp_id, shared_weights, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
+          xb = warp_glu_expert_bf16xf4_group_scal(xb, shared_exp_id, shared_weights, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
         } else {
           CHECK_EQ(topk_exp_id.dim(), 2);
           auto logits_bf16 = antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {});
           warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, gate_biases[l - 3], score_weight, topk_exp_id);
-          if (!ffn_gateup_s[l].is_cuda()) {
-            xb = warp_glu_expert_f16xf4_scal(xb, topk_exp_id, score_weight, ffn_gateup_s[l].to(torch::kCUDA), ffn_gateup_scals[l].to(torch::kCUDA), ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], \
-                                                                            ffn_down_s[l].to(torch::kCUDA), ffn_down_scals[l].to(torch::kCUDA), ffn_down_in_scals[l], ffn_down_w_scals[l]);
-          } else {
-            xb = warp_glu_expert_f16xf4_scal(xb, topk_exp_id, score_weight, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], \
+          xb = warp_glu_expert_bf16xf4_group_scal(xb, topk_exp_id, score_weight, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], \
                                                                             ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l]);
-          }
         }
       } else {
         if (l < 3) {
-          xb = warp_glu_expert_bf16xf8_block_scal(xb, shared_exp_id, shared_weights, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l], policy);
+          xb = warp_glu_expert_bf16xf8_block_scal(xb, shared_exp_id, shared_weights, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l]);
         } else {
           CHECK_EQ(topk_exp_id.dim(), 2);
           auto logits_bf16 = samples < 4 ? antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {}) : \
             torch::matmul(xb, gate_moes[l - 3].t());
           warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, gate_biases[l - 3], score_weight, topk_exp_id);
-          xb = warp_glu_expert_bf16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l], policy);
+          xb = warp_glu_expert_bf16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l]);
         }
       }
-      x = warp_x_add_allreduce_y_f16(x, xb);
+      x = warp_x_add_allreduce_y_bf16(x, xb);
     }
     x = warp_rmsnorm_bf16(x, rms_end_w, 1e-6);
     torch::matmul_out(logits, x, weight_classify.t());
@@ -1742,7 +1740,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("nccl_bcast", warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
 
-  m.def("x_add_allreduce_y_f16", warp_x_add_allreduce_y_f16);
+  m.def("x_add_allreduce_y_bf16", warp_x_add_allreduce_y_bf16);
   m.def("gemm_nt_bf16xfp8_block_scal", warp_gemm_nt_bf16xfp8_block_scal);
   m.def("deepseek_r1_attn_bf16xf8_block_scal", warp_deepseek_r1_attn_bf16xf8_block_scal);
   m.def("deepseek_r1_prepare_weights", warp_deepseek_r1_prepare_weights);
@@ -1750,6 +1748,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("deepseek_r1_forward", warp_deepseek_r1_forward);
   m.def("multi_head_latent_rope_bf16_v2", warp_multi_head_latent_rope_bf16_v2);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_bf16xf8_block_scal);
+  m.def("glu_expert_bf16xf4_group_scal", warp_glu_expert_bf16xf4_group_scal);
 
   m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
