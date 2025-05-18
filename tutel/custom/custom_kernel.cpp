@@ -1320,6 +1320,11 @@ std::tuple<torch::Tensor, torch::Tensor> uncached_exchange(const torch::Tensor &
   return {t, pointers.to(torch::kCUDA)};
 }
 
+static void configure_buffers(const std::tuple<torch::Tensor, torch::Tensor> &sigp, const std::tuple<torch::Tensor, torch::Tensor> &buffer) {
+  ::sigp = sigp;
+  ::buffer = buffer;
+}
+
 static torch::Tensor warp_x_add_allreduce_y_f16(const torch::Tensor &x, const torch::Tensor &t) {
   CHECK_EQ(t.dtype(), torch::kBFloat16);
   if (get_world_size() == 1)
@@ -1731,6 +1736,7 @@ TORCH_LIBRARY(tutel_ops, m) {
 #if defined(USE_NCCL)
   m.def("uncached_empty", uncached_empty);
   m.def("uncached_exchange", uncached_exchange);
+  m.def("configure_buffers", configure_buffers);
 
   m.def("test_allreduce_bf16", warp_test_allreduce_bf16);
   m.def("nccl_bcast", warp_nccl_bcast);
