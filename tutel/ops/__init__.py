@@ -31,7 +31,8 @@ def input_to_float8(
     # x_scl_sat.scale_mean = sum_val.squeeze(dim)
     return x_scl_sat
 
-@torch.compiler.disable(recursive=True)
+
 def __getattr__(name):
-    return getattr(torch.ops.tutel_ops, name)
+    fn = getattr(torch.ops.tutel_ops, name)
+    return torch.compiler.disable(fn, recursive=True)
 
