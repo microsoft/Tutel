@@ -51,7 +51,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       -v /:/host -w /host$(pwd) tutelgroup/qwen3_moe:mi300x4-chat-20250519 \
 >       --try_path ./Qwen/Qwen3-0.6B \
 >       --try_path ./Qwen/Qwen3-8B \
->       --try_path ./Qwen/Qwen3-30B \
+>       --try_path ./Qwen/Qwen3-32B \
 >       --serve --listen_port 8000 \
 >       --prompt "Calculate the indefinite integral of 1/sin(x) + x" --disable_thinking
 > ```
