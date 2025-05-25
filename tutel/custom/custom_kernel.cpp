@@ -1749,6 +1749,26 @@ void warp_deepseek_r1_forward(
       warp_gemm_nt_bf16xfp8_block_scal_out(x, weight_classify, weight_classify_scal, logits);
 }
 
+torch::Tensor warp_copy_to_device(const std::vector<torch::Tensor> &data) {
+  CHECK_NE(data.size(), 0);
+
+  auto shape = data[0].sizes().vec();
+  for (int i = 1; i < data.size(); ++i)
+    shape[0] += data[i].size(0);
+
+  auto out = torch::empty(shape, torch::TensorOptions().dtype(data[0].dtype()).device(torch::kCUDA));
+  char *dptr = (char*)out.data_ptr();
+  auto stream = at::cuda::getDefaultCUDAStream().stream();
+
+  for (const auto &t: data) {
+    size_t partial_size = t.numel() * torch::elementSize(torch::typeMetaToScalarType(t.dtype()));
+    cudaMemcpyAsync(dptr, t.data_ptr(), partial_size, cudaMemcpyHostToDevice, stream);
+    dptr += partial_size;
+  }
+  cudaStreamSynchronize(stream);
+  return out;
+}
+
 torch::Tensor warp_glu_expert_bf16xf8_block_scal_16x16_fnuz(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
@@ -1823,6 +1843,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("to_bfloat16", warp_to_bfloat16);
   m.def("to_float32", warp_to_float32);
   m.def("to_float8_block", warp_to_float8_block);
+  m.def("copy_to_device", warp_copy_to_device);
 
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_bf16xf8_block_scal_16x16_fnuz);
 #endif
