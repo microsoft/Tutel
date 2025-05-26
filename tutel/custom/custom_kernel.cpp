@@ -1091,8 +1091,12 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const tor
 
 torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms_w, double eps, int64_t id = 0) {
   CHECK_CUDA(x);
+  CHECK_EQ(x.dim(), 3);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
-  return antares::ops::call("rmsnorm_bf16", {x.view({-1, x.size(-1)}).view(torch::kInt32), rms_w.view(torch::kInt32)}, {eps, id / 2}).view(torch::kBFloat16).view({x.size(0), x.size(1), -1});
+  CHECK_EQ(id % 4, 0);
+  auto out = torch::empty({x.size(0), x.size(1), rms_w.size(0)}, torch::TensorOptions().dtype(x.dtype()).device(x.device()));
+  antares::ops::call("rmsnorm2_bf16", {x.view({-1, x.size(-1)}).view(torch::kInt64), rms_w.view(torch::kInt64), out}, {eps, id / 4}, false, 0, 2);
+  return out;
 }
 
 std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
@@ -1105,7 +1109,7 @@ std::tuple<torch::Tensor, torch::Tensor> warp_deepseek_sigmoid_top_8_static_v2(
   CHECK_EQ(moe_gate_b_bf16.dtype(), torch::kBFloat16);
 
   int n_experts = logits_bf16.size(-1);
-  AT_ASSERTM(n_experts == 256, "Deepseek R1 requires 256 experts for gating.");
+  // AT_ASSERTM(n_experts == 256, "Deepseek R1 requires 256 experts for gating.");
   int samples = logits_bf16.numel() / n_experts;
 
   auto device = logits_bf16.device();
@@ -1321,7 +1325,7 @@ namespace {
   std::vector<torch::Tensor> kv_b_proj_scals;
   std::vector<torch::Tensor> o_projs;
   std::vector<torch::Tensor> o_proj_scals;
-  torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight, rms_end_w;
+  torch::Tensor shared_exp_id, shared_weights, topk_exp_id, score_weight;
 
   std::tuple<torch::Tensor, torch::Tensor> buffer, sigp;
   std::vector<torch::Tensor> ffn_gateup_s;
@@ -1546,7 +1550,6 @@ void warp_deepseek_r1_prepare_weights(
   const torch::Tensor &shared_weights,
   const torch::Tensor &topk_exp_id,
   const torch::Tensor &score_weight,
-  const torch::Tensor &rms_end_w,
 
   const std::vector<torch::Tensor> &rms_att_ws,
   const std::vector<torch::Tensor> &rms_ffn_ws,
@@ -1591,7 +1594,6 @@ void warp_deepseek_r1_prepare_weights(
   ::moe_down_ss = moe_down_ss;
   ::gate_moes = gate_moes;
   ::gate_biases = gate_biases;
-  ::rms_end_w = rms_end_w;
   ::rms_att_ws = rms_att_ws;
   ::rms_ffn_ws = rms_ffn_ws;
   ::qkv_a_projs = qkv_a_projs;
@@ -1624,7 +1626,6 @@ void warp_deepseek_r1_prepare_weights_v2(
   const torch::Tensor &shared_weights,
   const torch::Tensor &topk_exp_id,
   const torch::Tensor &score_weight,
-  const torch::Tensor &rms_end_w,
 
   const std::vector<torch::Tensor> &rms_att_ws,
   const std::vector<torch::Tensor> &rms_ffn_ws,
@@ -1678,7 +1679,6 @@ void warp_deepseek_r1_prepare_weights_v2(
 
   ::gate_moes = gate_moes;
   ::gate_biases = gate_biases;
-  ::rms_end_w = rms_end_w;
   ::rms_att_ws = rms_att_ws;
   ::rms_ffn_ws = rms_ffn_ws;
   ::qkv_a_projs = qkv_a_projs;
@@ -1712,13 +1712,15 @@ void warp_deepseek_r1_forward(
     int samples = x.numel();
 
     x = token_emb.index_select(0, x.view({-1})).view({x.size(0), x.size(1), token_emb.size(1)});
-    #pragma unroll
-    for (int l = 0; l < rms_att_ws.size(); ++l) {
-      auto xb = warp_rmsnorm_bf16(x, rms_att_ws[l], 1e-6f);
-      xb = warp_deepseek_r1_attn_bf16xf8_block_scal(xb, key_cache[l], val_cache[l], cos_sin, qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], range, std::get<0>(buffer), pos, n_local_heads);
-      x = warp_x_add_allreduce_y_bf16(x, xb, false);
+    auto xb = warp_rmsnorm_bf16(x, rms_att_ws[0], 1e-6f);
 
+    #pragma unroll
+    for (int l = 0; l < o_projs.size(); ++l) {
+      xb = warp_deepseek_r1_attn_bf16xf8_block_scal(xb, key_cache[l], val_cache[l], cos_sin, qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], range, std::get<0>(buffer), pos, n_local_heads);
+
+      x = warp_x_add_allreduce_y_bf16(x, xb, false);
       xb = warp_rmsnorm_bf16(x, rms_ffn_ws[l], 1e-6f);
+
       if (ffn_gateup_s.size() > 0) {
         if (l < 3) {
           xb = warp_glu_expert_bf16xf4_group_scal(xb, shared_exp_id, shared_weights, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l], std::get<0>(buffer));
@@ -1740,13 +1742,15 @@ void warp_deepseek_r1_forward(
           xb = warp_glu_expert_bf16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l], std::get<0>(buffer));
         }
       }
+
       x = warp_x_add_allreduce_y_bf16(x, xb, samples > 1);
+      xb = warp_rmsnorm_bf16(x, rms_att_ws[l + 1], 1e-6f);
     }
-    x = warp_rmsnorm_bf16(x, rms_end_w, 1e-6);
+
     if (weight_classify.dtype() == torch::kBFloat16)
-      torch::matmul_out(logits, x, weight_classify.t());
+      torch::matmul_out(logits, xb, weight_classify.t());
     else
-      warp_gemm_nt_bf16xfp8_block_scal_out(x, weight_classify, weight_classify_scal, logits);
+      warp_gemm_nt_bf16xfp8_block_scal_out(xb, weight_classify, weight_classify_scal, logits);
 }
 
 torch::Tensor warp_copy_to_device(const std::vector<torch::Tensor> &data) {
