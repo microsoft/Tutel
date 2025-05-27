@@ -1043,12 +1043,22 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal_out(const torch::Tensor &x, const
   CHECK_EQ(x.dim(), 3);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
   CHECK_EQ(w.dim(), 2);
-  CHECK_EQ(scal.dim(), 2);
-  int samples = x.size(0) * x.size(1);
-
   CHECK_EQ(out.dtype(), torch::kBFloat16);
   CHECK_EQ(out.numel(), x.size(0) * x.size(1) * w.size(0));
-  antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(at::kComplexDouble), scal, out}, {}, false, 0, 3);
+
+  int samples = x.size(0) * x.size(1);
+
+  if (w.dtype() == torch::kBFloat16) {
+    auto dest = out.view({samples, -1});
+    torch::matmul_out(dest, x.view({samples, -1}), w.t());
+  } else {
+    CHECK_EQ(scal.dim(), 2);
+#if IS_NVIDIA_GPU
+    antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(-1)}).view(torch::kInt64), w.view(torch::kInt32), scal, out}, {}, false, 0, 3);
+#else
+    antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(-1)}).view(torch::kInt32), w.view(at::kComplexDouble), scal, out}, {}, false, 0, 3);
+#endif
+  }
   return out.view({x.size(0), x.size(1), w.size(0)});
 }
 
@@ -1068,8 +1078,10 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const tor
   }
 
   CHECK_EQ(scal.dim(), 2);
-  if (samples < 4)
-    return antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(at::kComplexDouble), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
+  if (samples < 4) {
+    auto out = torch::empty({x.size(0), x.size(1), w.size(0)}, torch::TensorOptions().dtype(x.dtype()).device(x.device()));
+    return warp_gemm_nt_bf16xfp8_block_scal_out(x, w, scal, out);
+  }
 
   torch::Tensor w_ = w;
 
@@ -1464,8 +1476,13 @@ torch::Tensor warp_glu_expert_bf16xf4_group_scal(
   CHECK_EQ(x.dim(), 3);
   int samples = x.size(0) * x.size(1), model_dim = x.size(2);
   int select_size = expert_ids.numel();
+#if IS_NVIDIA_GPU
+  auto y = antares::ops::call("fmoe_f16xf4_phase_1", {x.view({samples, -1, 8}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat32)}, {}).view({select_size, -1});
+  antares::ops::call("fmoe_f16xf4_phase_2", {y.view({samples, expert_ids.size(1), 2, -1, 8}).view(torch::kInt32), down_s, down_m, expert_ids, expert_weight, down_w.view(torch::kFloat32), out}, {}, false, 0, 6);
+#else
   auto y = antares::ops::call("fmoe_f16xf4_phase_1", {x.view({samples, -1, 16}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat64)}, {}).view({select_size, -1});
   antares::ops::call("fmoe_f16xf4_phase_2", {y.view({samples, expert_ids.size(1), 2, -1, 16}).view(torch::kInt32), down_s, down_m, expert_ids, expert_weight, down_w.view(torch::kFloat64), out}, {}, false, 0, 6);
+#endif
   return out.view(x.sizes());
 }
 
@@ -1748,10 +1765,7 @@ void warp_deepseek_r1_forward(
       xb = warp_rmsnorm_bf16(x, rms_att_ws[l + 1], 1e-6f);
     }
 
-    if (weight_classify.dtype() == torch::kBFloat16)
-      torch::matmul_out(logits, xb, weight_classify.t());
-    else
-      warp_gemm_nt_bf16xfp8_block_scal_out(xb, weight_classify, weight_classify_scal, logits);
+    warp_gemm_nt_bf16xfp8_block_scal_out(xb, weight_classify, weight_classify_scal, logits);
 }
 
 torch::Tensor warp_copy_to_device(const std::vector<torch::Tensor> &data) {
