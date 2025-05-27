@@ -126,7 +126,7 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
     Q = Q.squeeze(1);
     KV = KV.view({-1, 1, 1, KV.size(-1)});
     float softmax_scale = 0.1352337788608801f;
-    int splits = 32;
+    int splits = 16;
 
     static torch::Tensor kv_page_indices, kv_last_page_lens, splitData, splitLse, output;
     if (splitData.numel() == 0) {
@@ -197,7 +197,8 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
                              stream});
 
     {
-#include "mla_stage2_a16w16_bf16.h"
+// #include "mla_stage2_a16w16_bf16.h"
+#include "mla_stage2_a16w16_bf16_kvsplit16.h"
         static AiterAsmKernel impl_a16w16_bf16("mla_stage2_a16w16_bf16", mla_stage2_a16w16_bf16);
         impl_ptr = &impl_a16w16_bf16;
     }
