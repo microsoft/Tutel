@@ -1399,14 +1399,15 @@ static torch::Tensor warp_x_add_allreduce_y_bf16(const torch::Tensor &x, const t
     auto buf = std::get<0>(buffer).flatten();
     if (copy)
       buf.copy_(t.flatten());
-    antares::ops::call("sig_wait", {std::get<0>(sigp), std::get<1>(sigp)}, {get_world_rank()});
+    static torch::Tensor v_count = torch::zeros({8192 * 16}, torch::TensorOptions().dtype(torch::kInt64).device(x.device()));
     int scope_size = std::get<1>(sigp).numel();
+    std::vector<torch::Tensor> args = {x.flatten().view(torch::kInt32), std::get<1>(buffer), std::get<0>(sigp), std::get<1>(sigp), v_count};
     if (scope_size == 8)
-      return antares::ops::call("sig_sum_bf16_u8", {x.flatten().view(torch::kInt32), std::get<1>(buffer)}, {}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
+      return antares::ops::call("sig_allreduce_bf16_u8", args, {get_world_rank()}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
     if (scope_size == 4)
-      return antares::ops::call("sig_sum_bf16_u4", {x.flatten().view(torch::kInt32), std::get<1>(buffer)}, {}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
+      return antares::ops::call("sig_allreduce_bf16_u4", args, {get_world_rank()}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
     if (scope_size == 2)
-      return antares::ops::call("sig_sum_bf16_u2", {x.flatten().view(torch::kInt32), std::get<1>(buffer)}, {}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
+      return antares::ops::call("sig_allreduce_bf16_u2", args, {get_world_rank()}).view(torch::typeMetaToScalarType(x.dtype())).view(x.sizes());
     CHECK_EQ(scope_size, 1);
     return x + t;
   }
