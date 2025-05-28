@@ -1173,6 +1173,7 @@ torch::Tensor warp_multi_head_latent_rope_bf16_v3(
   const torch::Tensor &q_b_proj,
   const torch::Tensor &k_b_proj,
   const torch::Tensor &kv_ranges,
+  const torch::Tensor &kv_indices,
   const torch::Tensor &kv_cache,
   int64_t n_local_heads
 ) {
@@ -1187,7 +1188,7 @@ torch::Tensor warp_multi_head_latent_rope_bf16_v3(
   int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
   int samples = batch * seqlen;
 
-  auto q = antares::ops::call("rope_mla_bf16", {cos_sin, kv_a_norm, q_a_norm, x.flatten(0, 1), kv_cache.view({-1, 576}), kv_ranges}, {}).view({x.size(0), x.size(1), -1});
+  auto q = antares::ops::call("rope_mla_bf16", {cos_sin, kv_a_norm, q_a_norm, x.flatten(0, 1), kv_indices, kv_cache.view({-1, 576}), kv_ranges}, {}).view({x.size(0), x.size(1), -1});
 
   CHECK_EQ(q_b_proj.dtype(), torch::kBFloat16);
   CHECK_EQ(q_b_proj.dim(), 2);
@@ -1197,10 +1198,9 @@ torch::Tensor warp_multi_head_latent_rope_bf16_v3(
 
   auto q_output = torch::empty({batch, seqlen, n_local_heads, 512 + 64}, torch::TensorOptions().dtype(q.dtype()).device(q.device()));
   torch::Tensor qh = (IS_NVIDIA_GPU || samples >= 4) ? torch::matmul(q, q_b_proj.t()).view({samples, n_local_heads, -1}) : \
-    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1}); // (BS, 1536) @ (3072, 1536)
+    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1}); // (BS, 1536) @ (192 x H, 1536)
   auto buffer = q_output.flatten(0, 1).transpose(0, 1).narrow(-1, 0, 512);
-  torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj);
-
+  torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj); // (H, BS, 128) @ (H, 512, 128)
   antares::ops::call("rope_q_out_bf16", {cos_sin, qh.view({qh.size(0), -1, 3, 64}).view(torch::kInt32), kv_ranges, q_output.view({qh.size(0), -1, 9, 64}).view(torch::kInt32)}, {});
   return q_output;
 }
@@ -1252,7 +1252,8 @@ torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal(
     auto qkv = warp_gemm_nt_bf16xfp8_block_scal(data, qkv_a_proj, qkv_a_proj_scal); // [B, S, 1536 + 512 + 64]
 
     auto kv_range = range.narrow(0, 0, 2);
-    auto Q = warp_multi_head_latent_rope_bf16_v3(qkv, cos_sin, q_a_norm, kv_a_norm, q_b_proj, wkc, kv_range, key_cache, n_local_heads);
+    static torch::Tensor kv_indices = torch::arange(0, key_cache.numel() / key_cache.size(-1), torch::TensorOptions().dtype(torch::kInt32).device(kv_range.device()));
+    auto Q = warp_multi_head_latent_rope_bf16_v3(qkv, cos_sin, q_a_norm, kv_a_norm, q_b_proj, wkc, kv_range, kv_indices, key_cache, n_local_heads);
 
     if (batch == 1 && seqlen == 1) {
 #if defined(CUSTOM_MLA_DECODE)
