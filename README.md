@@ -9,18 +9,19 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### - ***The First to Support DeepSeek 671B NVFP4 Inference using A100/A800/H100/MI300 resources.***
 #### - ***Fastest "Thinking" on MI300X: Complete a 4K reasoning answer in 39 sec, compared with SGLANG in 1 min 35 sec.***
 
-#### DeepSeek FP4 Model: [nvidia/DeepSeek-R1-FP4](https://huggingface.co/nvidia/DeepSeek-R1-FP4)
+#### DeepSeek FP4 Model (upto 2025 Jun): [nvidia/DeepSeek-R1-FP4](https://huggingface.co/nvidia/DeepSeek-R1-FP4)
 > |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
-> | $"A100 \times 8" or "A800 \times 8"$ | N/A | N/A | 63 Generation TPS (bsz = 1) |
-> | $"H100 \times 8" or "H800 \times 8"$ | N/A | N/A | 81 Generation TPS (bsz = 1) |
-> | $MI300 \times 8$  | N/A | N/A | 112 Generation TPS (bsz = 1) |
+> | $"A100 \times 8" or "A800 \times 8"$ | N/A | N/A | 85 Generation TPS (bsz = 1) |
+> | $"H100 \times 8" or "H800 \times 8"$ | N/A | N/A | 102 Generation TPS (bsz = 1) |
+> | $MI300 \times 8$  | N/A | N/A | 148 Generation TPS (bsz = 1) |
+> | $MI300 \times 4$ (-e LOCAL\_SIZE=4)  | N/A | N/A | 116 Generation TPS (bsz = 1) |
 
 #### DeepSeek FP8 Model: [DeepSeek-R1](https://huggingface.co/deepseek-ai/DeepSeek-R1) or [DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324) or [DeepSeek-Prover-V2-671B](https://huggingface.co/deepseek-ai/DeepSeek-Prover-V2-671B)
 > |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
 > | $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
-> | $MI300 \times 8$  | N/A | 42 Generation TPS (bsz = 1) | 110 Generation TPS (bsz = 1) |
+> | $MI300 \times 8$  | N/A | 51 Generation TPS (bsz = 1) | 136 Generation TPS (bsz = 1) |
 
 #### Qwen3/Qwen3MoE Model: [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) or [Qwen/Qwen3-235B-A22B-FP8](https://huggingface.co/Qwen/Qwen3-235B-A22B-FP8)
 > |  ***Machine Type*** | ***SGL (ctx=64)***  | ***Tutel (ctx=64)***  |  ***SGL (ctx=4096)***  | ***Tutel (ctx=4096)*** |
@@ -30,7 +31,33 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 
 > [!TIP]
-> #### Run Qwen3MoE in Docker:
+> #### Run DeepSeek 671B in Docker (version-20250601):
+> ```sh
+> >> Example:
+>   huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
+> 
+>   # For A100/A800/H100/H800/H20/H200 (80G x 8):
+>   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all \
+>       -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:a100x8-chat-20250601 \
+>       --try_path ./nvidia/DeepSeek-R1-FP4 \
+>       --serve --listen_port 8000 \
+>       --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+>
+>   # For AMD MI300x NVFP4 (192G x 8):
+>   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
+>       --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+>       -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-chat-20250601 \
+>       --try_path ./nvidia/DeepSeek-R1-FP4 \
+>       --try_path ./deepseek-ai/DeepSeek-R1 \
+>       --try_path ./deepseek-ai/DeepSeek-V3-0324 \
+>       --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
+>       --try_path ./microsoft/MAI-DS-R1 \
+>       --serve --listen_port 8000 \
+>       --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+> ```
+
+> [!TIP]
+> #### Run Qwen3MoE in Docker (version-20250519):
 > ```sh
 > >> Example:
 >   huggingface-cli download Qwen/Qwen3-235B-A22B-FP8 --local-dir Qwen/Qwen3-235B-A22B-FP8
@@ -56,31 +83,6 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --prompt "Calculate the indefinite integral of 1/sin(x) + x" --disable_thinking
 > ```
 
-> [!TIP]
-> #### Run DeepSeek 671B in Docker:
-> ```sh
-> >> Example:
->   huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
-> 
->   # For A100/A800/H100/H800/H20/H200 (80G x 8):
->   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all \
->       -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:a100x8-chat-20250508 \
->       --try_path ./nvidia/DeepSeek-R1-FP4 \
->       --serve --listen_port 8000 \
->       --prompt "Calculate the indefinite integral of 1/sin(x) + x"
->
->   # For AMD MI300x NVFP4 (192G x 8):
->   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
->       --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
->       -v /:/host -w /host$(pwd) tutelgroup/deepseek-671b:mi300x8-chat-20250508 \
->       --try_path ./nvidia/DeepSeek-R1-FP4 \
->       --try_path ./deepseek-ai/DeepSeek-R1 \
->       --try_path ./deepseek-ai/DeepSeek-V3-0324 \
->       --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->       --try_path ./microsoft/MAI-DS-R1 \
->       --serve --listen_port 8000 \
->       --prompt "Calculate the indefinite integral of 1/sin(x) + x"
-> ```
 
 ## What's New:
 

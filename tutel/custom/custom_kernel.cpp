@@ -1105,8 +1105,8 @@ torch::Tensor warp_rmsnorm_bf16(const torch::Tensor &x, const torch::Tensor &rms
   CHECK_CUDA(x);
   CHECK_EQ(x.dim(), 3);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
-  CHECK_EQ(id % 4, 0);
   auto out = torch::empty({x.size(0), x.size(1), rms_w.size(0)}, torch::TensorOptions().dtype(x.dtype()).device(x.device()));
+  CHECK_EQ(id % 4, 0);
   antares::ops::call("rmsnorm2_bf16", {x.view({-1, x.size(-1)}).view(torch::kInt64), rms_w.view(torch::kInt64), out}, {eps, id / 4}, false, 0, 2);
   return out;
 }
@@ -1187,24 +1187,21 @@ torch::Tensor warp_multi_head_latent_rope_bf16_v3(
   int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
   int samples = batch * seqlen;
 
-  auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
-  auto v_output = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
-  auto k_output = antares::ops::call("rope2_kt_bf16", {v_output.view({-1, 8, 64}).view(torch::kInt32), cos_sin, x.view({-1, 33, 64}).view(torch::kInt32), kv_ranges, kv_cache.view({-1, 9, 64}).view(torch::kInt32)}, {}).view(torch::kBFloat16).view({batch, seqlen, 576});
+  auto q = antares::ops::call("rope_mla_bf16", {cos_sin, kv_a_norm, q_a_norm, x.flatten(0, 1), kv_cache.view({-1, 576}), kv_ranges}, {}).view({x.size(0), x.size(1), -1});
 
-  auto &w_q_b_proj = q_b_proj;
-  CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
-  CHECK_EQ(w_q_b_proj.dim(), 2);
+  CHECK_EQ(q_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(q_b_proj.dim(), 2);
   CHECK_EQ(k_b_proj.dtype(), torch::kBFloat16);
   CHECK_EQ(k_b_proj.dim(), 3);
   CHECK_CONTIGUOUS(k_b_proj.transpose(1, 2));
 
   auto q_output = torch::empty({batch, seqlen, n_local_heads, 512 + 64}, torch::TensorOptions().dtype(q.dtype()).device(q.device()));
-  torch::Tensor qh = (IS_NVIDIA_GPU || samples >= 4) ? torch::matmul(q, w_q_b_proj.t()).view({samples, n_local_heads, -1}) : \
-    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), w_q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1}); // (BS, 1536) @ (3072, 1536)
+  torch::Tensor qh = (IS_NVIDIA_GPU || samples >= 4) ? torch::matmul(q, q_b_proj.t()).view({samples, n_local_heads, -1}) : \
+    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1}); // (BS, 1536) @ (3072, 1536)
   auto buffer = q_output.flatten(0, 1).transpose(0, 1).narrow(-1, 0, 512);
   torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj);
 
-  antares::ops::call("rope2_qt_bf16_put", {cos_sin, qh.view({qh.size(0), -1, 3, 64}).view(torch::kInt32), kv_ranges, q_output.view({qh.size(0), -1, 9, 64}).view(torch::kInt32)}, {});
+  antares::ops::call("rope_q_out_bf16", {cos_sin, qh.view({qh.size(0), -1, 3, 64}).view(torch::kInt32), kv_ranges, q_output.view({qh.size(0), -1, 9, 64}).view(torch::kInt32)}, {});
   return q_output;
 }
 
