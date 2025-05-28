@@ -126,7 +126,19 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
     Q = Q.squeeze(1);
     KV = KV.view({-1, 1, 1, KV.size(-1)});
     float softmax_scale = 0.1352337788608801f;
-    int splits = 16;
+    static const int splits = 32;
+
+    AiterAsmKernel *impl_comb = nullptr;
+    if (splits == 32) {
+#include "mla_stage2_a16w16_bf16_kvsplit32.h"
+      static AiterAsmKernel impl_a16w16_bf16("mla_stage2_a16w16_bf16", mla_stage2_a16w16_bf16);
+      impl_comb = &impl_a16w16_bf16;
+    } else {
+      CHECK_EQ(splits, 16);
+#include "mla_stage2_a16w16_bf16_kvsplit16.h"
+      static AiterAsmKernel impl_a16w16_bf16("mla_stage2_a16w16_bf16", mla_stage2_a16w16_bf16);
+      impl_comb = &impl_a16w16_bf16;
+    }
 
     static torch::Tensor kv_page_indices, kv_last_page_lens, splitData, splitLse, output;
     if (splitData.numel() == 0) {
@@ -196,13 +208,6 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
                              1,                     // bdz
                              stream});
 
-    {
-// #include "mla_stage2_a16w16_bf16.h"
-#include "mla_stage2_a16w16_bf16_kvsplit16.h"
-        static AiterAsmKernel impl_a16w16_bf16("mla_stage2_a16w16_bf16", mla_stage2_a16w16_bf16);
-        impl_ptr = &impl_a16w16_bf16;
-    }
-
     Kernel2Args args2;
     size_t arg2_size = sizeof(args2);
     args2.p0 = splitData.data_ptr();
@@ -215,7 +220,7 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
     args2.s3 = output.stride(0);
     args2.s4 = output.stride(1);
 
-    impl_ptr->launch_kernel({&args2,
+    impl_comb->launch_kernel({&args2,
                              &arg2_size,
                              Q.size(0),             // gdx
                              Q.size(1),             // gdy
