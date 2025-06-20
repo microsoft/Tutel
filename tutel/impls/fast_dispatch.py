@@ -201,10 +201,27 @@ def extract_critical(scores, top_k, loss_fn=losses.gshard_loss, capacity_factor=
     if get_world_rank(group) == 0:
         logging.info(f"Capacity = {capacity}, real-time capacity-factor for top-{top_k_original} = {capacity / (top_k * samples_per_expert)}")
 
+    locations2.topk_ids = topk_indices
     return (num_global_experts, indices_s, locations_s, gates_s, capacity, locations2), l_loss
 
 def get_dispatch_count(critial_data):
     return critial_data[-1]
+
+def get_topk_selection(critial_data):
+    return critial_data[-1].topk_ids, critial_data[-1]
+
+def get_reversed_sample_ids(critial_data, return_id_type='sample_id'):
+    expert_ids, location_ids, capacity = torch.cat(critial_data[1]).view(len(critial_data[1]), -1), torch.cat(critial_data[2]).view(len(critial_data[2]), -1), critial_data[4]
+    num_samples = expert_ids.size(-1)
+    num_tokens = critial_data[0] * capacity
+    offset = expert_ids * capacity + location_ids
+    result = torch.full([num_tokens], -1, dtype=torch.int32, device=expert_ids.device)
+    if return_id_type == 'sample_id':
+        return result.scatter_(0, offset.flatten().long(), torch.arange(offset.numel(), dtype=torch.int32, device=expert_ids.device) % num_samples).view(-1, capacity)
+    elif return_id_type == 'top_id':
+        return result.scatter_(0, offset.flatten().long(), torch.arange(offset.numel(), dtype=torch.int32, device=expert_ids.device) // num_samples).view(-1, capacity)
+    else:
+        raise Exception(f'Unrecognized return_id_type=`{return_id_type}`')
 
 def fast_encode(data, critial_data, is_postscore=True):
     assert data.is_contiguous(), "Input tensor for encode/decode should be in contiguous memory format."

@@ -16,9 +16,10 @@ if torch.cuda.is_available():
 else:
   dist = system.init_data_model_parallel(backend='gloo')
 
-num_samples = 16 * 1024
+outer_batch, sequence_length = 16, 1024
+num_samples = outer_batch * sequence_length
 model_dim, hidden_size = 2048, 2048
-num_local_experts = 2
+num_local_experts = 4
 num_global_experts = num_local_experts * dist.global_size
 
 
@@ -56,10 +57,29 @@ class CustomMoE(torch.nn.Module):
     def forward(self, x, k=2):
         logits = self.gate(x)
         scores = F.softmax(logits, dim=-1)
-        crit, l_aux = moe.top_k_routing(scores, top_k=k)
+
+        crit, l_aux = moe.top_k_routing(scores, top_k=k, capacity_factor=0)
+
+        topk_ids, total_tokens = moe.get_topk_selection(crit)
+        print(f'\n>> Get Topk Selection Result of Shape[B * S, K] = {topk_ids.shape}:\n{topk_ids}')
+        print(f'\n>> Get Total Tokens per Expert of Shape[E] = {total_tokens.shape}: {total_tokens}')
+
+        sample_index = moe.get_reversed_sample_ids(crit, return_id_type='sample_id')
+        top_index = moe.get_reversed_sample_ids(crit, return_id_type='top_id')
+        print(f'\n>> Get Reversed Sample Index Map of Shape[E, CAPACITY] = {sample_index.shape} (-1 for padded tokens):\n{sample_index}')
+        print(f'\n>> Get Reversed TopK Index Map of Shape[E, CAPACITY] = {top_index.shape} (-1 for padded tokens):\n{top_index}')
+
+        sample_outer_batch_index = sample_index // sequence_length
+        sample_inner_sequence_index = sample_index % sequence_length
+        print(f'\n>> Get Outer-batch Index Map of Shape[E, CAPACITY] = {sample_outer_batch_index.shape} (-1 for padded tokens):\n{sample_outer_batch_index}')
+        print(f'\n>> Get Inner-sequence Index Map of Shape[E, CAPACITY] = {sample_inner_sequence_index.shape} (-1 for padded tokens):\n{sample_inner_sequence_index}')
+
         y = moe.fast_encode(x, crit)
         y = net.all_to_all(y, 1, 0)
+
+        print(f'\n>> Forwarding Shuffled Expert Input of Shape[E, CAPACITY, M] = {y.shape} ..\n')
         y = self.expert(y)
+
         y = net.all_to_all(y, 0, 1)
         output = moe.fast_decode(y, crit)
         return output, l_aux
