@@ -23,7 +23,7 @@ parser.add_argument('--model_dim', type=int, default=2048)
 parser.add_argument('--hidden_size', type=int, default=2048)
 parser.add_argument('--num_local_experts', type=int, default=2)
 parser.add_argument('--dtype', type=str, default='float32')
-parser.add_argument('--fp32_gate', default=False, action='store_true')
+parser.add_argument('--fp32_gate', default=True, action='store_true')
 parser.add_argument('--top', type=int, default=2)
 parser.add_argument('--l_aux_wt', type=float, default=0.0)
 parser.add_argument('--a2a_ffn_overlap_degree', type=int, default=1)
@@ -107,7 +107,7 @@ if args.checkpoint_path:
     else:
         print('Checkpoint not loaded: file `%s` is not found. Will train the model from start.' % checkpoint_path)
 
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-5)
+optimizer = torch.optim.SGD(model.parameters(), lr=1e-4)
 
 torch.manual_seed(0)
 x = torch.tensor(torch.randn([batch_size, num_tokens, model_dim], dtype=torch.float32, device='cpu').detach().numpy(), dtype=torch.get_default_dtype(), requires_grad=False, device=device)
