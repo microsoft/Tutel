@@ -70,7 +70,7 @@ class CustomMoE(torch.nn.Module):
         print(f'\n>> Get Reversed TopK Index Map of Shape[E, CAPACITY] = {top_index.shape} (-1 for padded tokens):\n{top_index}')
 
         sample_outer_batch_index = sample_index // sequence_length
-        sample_inner_sequence_index = sample_index % sequence_length
+        sample_inner_sequence_index = torch.where(sample_index >= 0, sample_index % sequence_length, sample_index)
         print(f'\n>> Get Outer-batch Index Map of Shape[E, CAPACITY] = {sample_outer_batch_index.shape} (-1 for padded tokens):\n{sample_outer_batch_index}')
         print(f'\n>> Get Inner-sequence Index Map of Shape[E, CAPACITY] = {sample_inner_sequence_index.shape} (-1 for padded tokens):\n{sample_inner_sequence_index}')
 

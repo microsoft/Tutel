@@ -38,15 +38,15 @@ class FusedExpertsNetwork(torch.nn.Module):
 
     def reset_parameters(self):
         with torch.no_grad():
+            import math
+            fc1_stdv, fc2_stdv = 1. / math.sqrt(self.batched_fc1_w.size(-1)), 1. / math.sqrt(self.batched_fc2_w.size(-2))
             for i in range(self.batched_fc1_w.size(0)):
-                fc1 = torch.nn.Linear(self.model_dim, self.hidden_size, bias=self.batched_fc1_bias is not None)
-                fc2 = torch.nn.Linear(self.hidden_size, self.output_dim, bias=self.batched_fc2_bias is not None)
-                self.batched_fc1_w[i] = fc1.weight
+                self.batched_fc1_w[i] = (torch.rand([self.hidden_size, self.model_dim], dtype=torch.float32, device=self.batched_fc1_w.device) * (fc1_stdv + fc1_stdv) - fc1_stdv).to(self.batched_fc1_w.dtype)
+                self.batched_fc2_w[i] = (torch.rand([self.hidden_size, self.output_dim], dtype=torch.float32, device=self.batched_fc2_w.device) * (fc2_stdv + fc2_stdv) - fc2_stdv).to(self.batched_fc2_w.dtype)
                 if self.batched_fc1_bias is not None:
-                    self.batched_fc1_bias[i] = fc1.bias
-                self.batched_fc2_w[i] = fc2.weight.t()
+                    self.batched_fc1_bias[i].zero_()
                 if self.batched_fc2_bias is not None:
-                    self.batched_fc2_bias[i] = fc2.bias[:self.batched_fc2_bias.size(-1)]
+                    self.batched_fc2_bias[i].zero_()
 
     def extra_repr(self):
         return 'model_dim=%d, hidden_size=%d, output_dim=%d, num_experts_per_device=%d. has_fc1_bias=%s, has_fc2_bias=%s.' % (
