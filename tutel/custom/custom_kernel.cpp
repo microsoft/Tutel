@@ -482,29 +482,6 @@ void warp_nccl_all_reduce(const torch::Tensor &t, const torch::Tensor &out) {
   ncclAllReduce(t.data_ptr(), out.data_ptr(), t.numel(), ncclType, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
 }
 
-static void warp_test_allreduce_bf16(int64_t bf16_count) {
-  static torch::Tensor w;
-  static void* dptr;
-  if (w.numel() == 0) {
-    w = torch::randn({bf16_count}, torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA));
-    dptr = w.data_ptr();
-  }
-
-  AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
-  auto stream = at::cuda::getCurrentCUDAStream().stream();
-  int steps = 100;
-  void *h1, *h2;
-
-  if (shared_world_rank == 0)
-    h1 = ab::recordTime(stream);
-  for (int i = 0; i < steps; ++i)
-    ncclAllReduce(dptr, dptr, bf16_count, ncclBfloat16, ncclSum, (ncclComm_t)shared_nccl_comm, stream);
-  if (shared_world_rank == 0) {
-    h2 = ab::recordTime(stream);
-    printf("Latency for All Reduce BF16 (size = %d x %d) = %g\n", int(bf16_count), 2, ab::convertToElapsedTime(h1, h2) / steps);
-  }
-}
-
 static void batch_all_to_all_v(const std::vector<torch::Tensor> &ins, const std::vector<torch::Tensor> &outs, const torch::Tensor &in_sizes_, const torch::Tensor &out_sizes_) {
   AT_ASSERTM(shared_world_size > 0, "Failed to initialize Shared NCCL");
 
@@ -1008,6 +985,31 @@ std::tuple<torch::Tensor, torch::Tensor> warp_to_float8_per_token(const torch::T
   auto fp8_w = antares::ops::call("to_float8_per_token", {local_w, scal}, {}).view(at::kFloat8_e4m3fn).view(w.sizes());
   return {fp8_w, scal.view(fp8_w.narrow(-1, 0, fp8_w.size(-1) / 128).sizes())};
 }
+
+torch::Tensor warp_topk_token_sort(
+  const torch::Tensor &topk_ids,
+  const torch::Tensor &num_tokens_post_padded,
+  int64_t num_pages
+) {
+  const int E = num_tokens_post_padded.numel();
+  auto sorted_token_ids = torch::empty({E, num_pages}, torch::TensorOptions().dtype(torch::kInt32).device(topk_ids.device()));
+  return antares::ops::call("token_sort_i32", {topk_ids.flatten(), num_tokens_post_padded, sorted_token_ids}, {}).flatten();
+}
+
+torch::Tensor warp_scatter_sample_ids(const torch::Tensor &expert_ids, const torch::Tensor &location_ids, const torch::Tensor &out, int64_t capacity, int64_t num_samples, bool return_top_id) {
+  CHECK_CUDA(out);
+  CHECK_EQ(expert_ids.dtype(), torch::kInt32);
+  CHECK_EQ(location_ids.dtype(), torch::kInt32);
+  CHECK_EQ(out.dtype(), torch::kInt32);
+  CHECK_EQ(capacity > 0, true);
+
+  if (return_top_id)
+    antares::ops::call("scatter_top_ids_i32", {expert_ids.flatten(), location_ids.flatten(), out.flatten()}, {capacity, num_samples});
+  else
+    antares::ops::call("scatter_sample_ids_i32", {expert_ids.flatten(), location_ids.flatten(), out.flatten()}, {capacity, num_samples});
+  return out;
+}
+
 
 torch::Tensor warp_to_float32(const torch::Tensor &w, const torch::Tensor &scal) {
   CHECK_CUDA(w);
@@ -1845,7 +1847,6 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("uncached_exchange", uncached_exchange);
   m.def("configure_buffers", configure_buffers);
 
-  m.def("test_allreduce_bf16", warp_test_allreduce_bf16);
   m.def("nccl_bcast", warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
 
@@ -1868,6 +1869,8 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("to_float32", warp_to_float32);
   m.def("to_float8_block", warp_to_float8_block);
   m.def("to_float8_per_token", warp_to_float8_per_token);
+  m.def("topk_token_sort", warp_topk_token_sort);
+  m.def("scatter_sample_ids", warp_scatter_sample_ids);
   m.def("copy_to_device", warp_copy_to_device);
 
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_bf16xf8_block_scal_16x16_fnuz);

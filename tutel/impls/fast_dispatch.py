@@ -211,15 +211,19 @@ def get_topk_selection(critial_data):
     return critial_data[-1].topk_ids, critial_data[-1]
 
 def get_reversed_sample_ids(critial_data, return_id_type='sample_id'):
+    from tutel import ops
     expert_ids, location_ids, capacity = torch.cat(critial_data[1]).view(len(critial_data[1]), -1), torch.cat(critial_data[2]).view(len(critial_data[2]), -1), critial_data[4]
     num_samples = expert_ids.size(-1)
-    num_tokens = critial_data[0] * capacity
-    offset = expert_ids * capacity + location_ids
-    result = torch.full([num_tokens], -1, dtype=torch.int32, device=expert_ids.device)
-    if return_id_type == 'sample_id':
-        return result.scatter_(0, offset.flatten().long(), torch.arange(offset.numel(), dtype=torch.int32, device=expert_ids.device) % num_samples).view(-1, capacity)
-    elif return_id_type == 'top_id':
-        return result.scatter_(0, offset.flatten().long(), torch.arange(offset.numel(), dtype=torch.int32, device=expert_ids.device) // num_samples).view(-1, capacity)
+    out = torch.full([critial_data[0], capacity], -1, dtype=torch.int32, device=expert_ids.device)
+
+    if return_id_type == 'top_id':
+        """ offset = torch.where(location_ids < capacity, expert_ids * capacity + location_ids, critial_data[0] * capacity)
+        out = torch.full([critial_data[0] * capacity + 1], -1, dtype=torch.int32, device=expert_ids.device)
+        out = out.scatter_(0, offset.flatten().long(), torch.arange(offset.numel(), dtype=torch.int32, device=expert_ids.device) // num_samples)[:-1].view(-1, capacity) """
+
+        return ops.scatter_sample_ids(expert_ids, location_ids, out, capacity, num_samples, True)
+    elif return_id_type == 'sample_id':
+        return ops.scatter_sample_ids(expert_ids, location_ids, out, capacity, num_samples, False)
     else:
         raise Exception(f'Unrecognized return_id_type=`{return_id_type}`')
 
