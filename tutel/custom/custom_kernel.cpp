@@ -986,6 +986,14 @@ std::tuple<torch::Tensor, torch::Tensor> warp_to_float8_per_token(const torch::T
   return {fp8_w, scal.view(fp8_w.narrow(-1, 0, fp8_w.size(-1) / 128).sizes())};
 }
 
+torch::Tensor warp_scaled_softmax_inv(const torch::Tensor &x, const torch::Tensor &range, double scale_inv) {
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(range.dtype(), torch::kInt32);
+  auto out = antares::ops::call("scaled_mask_inv_bf16", {x.view({-1, x.size(-1)}), range}, {(float)scale_inv}).view(x.sizes());
+  return at::softmax(out, -1);
+}
+
 torch::Tensor warp_topk_token_sort(
   const torch::Tensor &topk_ids,
   const torch::Tensor &num_tokens_post_padded,
@@ -1274,7 +1282,7 @@ torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal(
 #else
       auto KV = key_cache;
       auto S = torch::matmul(Q.view({n_heads, 576}), KV.squeeze(1).t());
-      auto T = at::softmax(antares::ops::call("scaled_mask_bf16", {S, kv_range}, {}), -1);
+      auto T = warp_scaled_softmax_inv(S, kv_range, 0.1352337788608801f);
       Q = torch::matmul(T, KV.squeeze(1));
       Q = torch::bmm(Q.unsqueeze(1).narrow(-1, 0, 512), wvc.transpose(1, 2));
 #endif
@@ -1869,6 +1877,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("to_float32", warp_to_float32);
   m.def("to_float8_block", warp_to_float8_block);
   m.def("to_float8_per_token", warp_to_float8_per_token);
+  m.def("scaled_softmax_inv", warp_scaled_softmax_inv);
   m.def("topk_token_sort", warp_topk_token_sort);
   m.def("scatter_sample_ids", warp_scatter_sample_ids);
   m.def("copy_to_device", warp_copy_to_device);
