@@ -1169,6 +1169,27 @@ std::tuple<torch::Tensor, torch::Tensor> warp_qwen3_moe_top_8_static(
   return {top_v_out, top_k_out};
 }
 
+std::tuple<torch::Tensor, torch::Tensor> warp_kimi_sigmoid_top_8_static_v2(
+     const torch::Tensor &logits_bf16,
+     const torch::Tensor &moe_gate_b_bf16,
+     const ::std::optional<torch::Tensor> &top_v_out_,
+     const ::std::optional<torch::Tensor> &top_k_out_) {
+  CHECK_CUDA(logits_bf16);
+  CHECK_EQ(logits_bf16.dtype(), torch::kBFloat16);
+  CHECK_EQ(moe_gate_b_bf16.dtype(), torch::kBFloat16);
+
+  int n_experts = logits_bf16.size(-1);
+  int samples = logits_bf16.numel() / n_experts;
+
+  auto device = logits_bf16.device();
+  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+  AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt32, "Output tensor space should be float32 for top_scores and int32 for top_ids.");
+
+  antares::ops::call("kimi_k2_sigmoid_top_k_routed_scaled_f32", {logits_bf16.view({samples, n_experts}), moe_gate_b_bf16, top_v_out, top_k_out}, {}, false, 0, 3);
+  return {top_v_out, top_k_out};
+}
+
 torch::Tensor warp_qwen3_norm_rotary_kvcache2_bf16(
      const torch::Tensor &cos_cache,
      const torch::Tensor &sin_cache,
@@ -1251,7 +1272,8 @@ torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal(
   const torch::Tensor &range,
   const torch::Tensor &out,
   int64_t pos,
-  int64_t n_local_heads
+  int64_t n_local_heads,
+  double softmax_scale
 ) {
   CHECK_CUDA(data);
   CHECK_EQ(data.dim(), 3);
@@ -1277,18 +1299,18 @@ torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal(
 
     if (batch == 1 && seqlen == 1) {
 #if defined(CUSTOM_MLA_DECODE)
-      Q = mla_decode_fwd(Q, key_cache.transpose(1, 0), kv_range).squeeze(0);
+      Q = mla_decode_fwd(Q, key_cache.transpose(1, 0), kv_range, softmax_scale).squeeze(0);
       Q = antares::ops::call("logits_bf16", {Q.view(torch::kInt32), wvc.view(torch::kInt32)}, {});
 #else
       auto KV = key_cache;
       auto S = torch::matmul(Q.view({n_heads, 576}), KV.squeeze(1).t());
-      auto T = warp_scaled_softmax_inv(S, kv_range, 0.1352337788608801f);
+      auto T = warp_scaled_softmax_inv(S, kv_range, softmax_scale);
       Q = torch::matmul(T, KV.squeeze(1));
       Q = torch::bmm(Q.unsqueeze(1).narrow(-1, 0, 512), wvc.transpose(1, 2));
 #endif
     } else {
       auto C = key_cache.narrow(0, 0, pos + seqlen);
-      auto scores = at::einsum("bshc,tbc->bsht", {Q, C}) * 0.1352337788608801f;
+      auto scores = at::einsum("bshc,tbc->bsht", {Q, C}) * (float)softmax_scale;
       Q = at::einsum("bsht,tbc->bshc", {at::softmax(scores, -1), C}).narrow(-1, 0, 512);
       Q = at::einsum("bshc,hdc->bshd", {Q, wvc}).contiguous();
     }
@@ -1330,6 +1352,7 @@ torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal(
 
 namespace {
   int64_t n_local_heads;
+  double softmax_scale;
   torch::Tensor token_emb, weight_classify, weight_classify_scal;
   torch::Tensor cos_sin;
   torch::Tensor key_cache;
@@ -1575,6 +1598,7 @@ void warp_deepseek_r1_prepare_weights(
   int64_t n_local_heads,
   int64_t max_seq_len,
   int64_t batch,
+  double softmax_scale,
   const torch::Tensor &token_emb,
   const torch::Tensor &weight_classify,
   const torch::Tensor &weight_classify_scal,
@@ -1644,6 +1668,7 @@ void warp_deepseek_r1_prepare_weights(
   ::shared_weights = shared_weights;
   ::topk_exp_id = topk_exp_id;
   ::score_weight = score_weight;
+  ::softmax_scale = softmax_scale;
 }
 
 
@@ -1651,6 +1676,7 @@ void warp_deepseek_r1_prepare_weights_v2(
   int64_t n_local_heads,
   int64_t max_seq_len,
   int64_t batch,
+  double softmax_scale,
   const torch::Tensor &token_emb,
   const torch::Tensor &weight_classify,
   const torch::Tensor &weight_classify_scal,
@@ -1731,6 +1757,7 @@ void warp_deepseek_r1_prepare_weights_v2(
   ::shared_weights = shared_weights;
   ::topk_exp_id = topk_exp_id;
   ::score_weight = score_weight;
+  ::softmax_scale = softmax_scale;
 }
 
 void warp_deepseek_r1_forward(
@@ -1746,32 +1773,42 @@ void warp_deepseek_r1_forward(
 
     x = token_emb.index_select(0, x.view({-1})).view({x.size(0), x.size(1), token_emb.size(1)});
     auto xb = warp_rmsnorm_bf16(x, rms_att_ws[0], 1e-6f);
+    int delta = std::max(ffn_gateup_s.size(), moe_gate_up_ws.size()) - gate_moes.size();
+
+    auto sigmoid_scaled_routing = [&](auto &logits_bf16, auto &moe_gate_b_bf16, auto &top_v_out_, auto &top_k_out_) {
+      if (logits_bf16.size(-1) == 384)
+        return warp_kimi_sigmoid_top_8_static_v2(logits_bf16, moe_gate_b_bf16, top_v_out_, top_k_out_);
+      else
+        return warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, moe_gate_b_bf16, top_v_out_, top_k_out_);
+    };
 
     #pragma unroll
     for (int l = 0; l < o_projs.size(); ++l) {
-      xb = warp_deepseek_r1_attn_bf16xf8_block_scal(xb, key_cache[l], val_cache[l], cos_sin, qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], range, std::get<0>(buffer), pos, n_local_heads);
+      xb = warp_deepseek_r1_attn_bf16xf8_block_scal(xb, key_cache[l], val_cache[l], cos_sin, qkv_a_projs[l], qkv_a_proj_scals[l], q_a_norms[l], kv_a_norms[l], q_b_projs[l], q_b_proj_scals[l], kv_b_projs[l], kv_b_proj_scals[l], o_projs[l], o_proj_scals[l], range, std::get<0>(buffer), pos, n_local_heads, softmax_scale);
 
       x = warp_x_add_allreduce_y_bf16(x, xb, false);
       xb = warp_rmsnorm_bf16(x, rms_ffn_ws[l], 1e-6f);
 
+      bool is_shared = (l < delta);
+
       if (ffn_gateup_s.size() > 0) {
-        if (l < 3) {
+        if (is_shared) {
           xb = warp_glu_expert_bf16xf4_group_scal(xb, shared_exp_id, shared_weights, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l], std::get<0>(buffer));
         } else {
           CHECK_EQ(topk_exp_id.dim(), 2);
-          auto logits_bf16 = antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {});
-          warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, gate_biases[l - 3], score_weight, topk_exp_id);
+          auto logits_bf16 = antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - delta].view(torch::kInt32)}, {});
+          sigmoid_scaled_routing(logits_bf16, gate_biases[l - delta], score_weight, topk_exp_id);
           xb = warp_glu_expert_bf16xf4_group_scal(xb, topk_exp_id, score_weight, ffn_gateup_s[l], ffn_gateup_scals[l], ffn_gateup_in_scals[l], ffn_gateup_w_scals[l], \
                                                                             ffn_down_s[l], ffn_down_scals[l], ffn_down_in_scals[l], ffn_down_w_scals[l], std::get<0>(buffer));
         }
       } else {
-        if (l < 3) {
+        if (is_shared) {
           xb = warp_glu_expert_bf16xf8_block_scal(xb, shared_exp_id, shared_weights, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l], std::get<0>(buffer));
         } else {
           CHECK_EQ(topk_exp_id.dim(), 2);
-          auto logits_bf16 = samples < 4 ? antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - 3].view(torch::kInt32)}, {}) : \
-            torch::matmul(xb, gate_moes[l - 3].t());
-          warp_deepseek_sigmoid_top_8_static_v2(logits_bf16, gate_biases[l - 3], score_weight, topk_exp_id);
+          auto logits_bf16 = samples < 4 ? antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_moes[l - delta].view(torch::kInt32)}, {}) : \
+            torch::matmul(xb, gate_moes[l - delta].t());
+          sigmoid_scaled_routing(logits_bf16, gate_biases[l - delta], score_weight, topk_exp_id);
           xb = warp_glu_expert_bf16xf8_block_scal(xb, topk_exp_id, score_weight, moe_gate_up_ws[l], moe_gate_up_ss[l], moe_down_ws[l], moe_down_ss[l], std::get<0>(buffer));
         }
       }
@@ -1870,8 +1907,8 @@ TORCH_LIBRARY(tutel_ops, m) {
 
   m.def("qwen3_moe_scaled_topk", warp_qwen3_moe_top_8_static);
   m.def("qwen3_norm_rotary_kvcache2_bf16", warp_qwen3_norm_rotary_kvcache2_bf16);
+  m.def("kimi_moe_sigmoid_scaled_topk", warp_kimi_sigmoid_top_8_static_v2);
   m.def("deepseek_moe_sigmoid_scaled_topk", warp_deepseek_sigmoid_top_8_static_v2);
-  m.def("deepseek_sigmoid_top_8_static_v2", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
   m.def("to_bfloat16", warp_to_bfloat16);
   m.def("to_float32", warp_to_float32);

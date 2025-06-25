@@ -122,10 +122,9 @@ struct __attribute__((packed)) Kernel2Args
     unsigned int s0, s1, s2, s3, s4;
 };
 
-static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr) {
+static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr, double softmax_scale) {
     Q = Q.squeeze(1);
     KV = KV.view({-1, 1, 1, KV.size(-1)});
-    float softmax_scale = 0.1352337788608801f;
     static const int splits = 32;
 
     AiterAsmKernel *impl_comb = nullptr;
@@ -171,7 +170,7 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
     args.ptr_LTP = kv_indptr.data_ptr();
     args.ptr_LTD = kv_page_indices.data_ptr();
     args.ptr_LTL = kv_last_page_lens.data_ptr();
-    args.scalar = softmax_scale;
+    args.scalar = (float)softmax_scale;
     args.s_MQA = gqa_ratio;
     args.s_kv_split = kv_split;
     args.s_Q_Bs = stride_Q;
