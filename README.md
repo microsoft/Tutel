@@ -31,11 +31,36 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 
 > [!TIP]
-> #### Run DeepSeek 671B in Docker (version-20250601, with enhanced [MLA RMSNorm](doc/Asymmetric-RMS-Norms.svg)):
+> #### Run Kimi-K2 1T-param Inference in Docker (version-20250712):
+> ```sh
+> >> Example:
+>   huggingface-cli download moonshotai/Kimi-K2-Instruct --local-dir ./moonshotai/Kimi-K2-Instruct
+>
+>   # For A100/A800/H100/H800/H20/H200 (80G x 8):
+>   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
+>       --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
+>       tutelgroup/deepseek-671b:a100x8-chat-20250712 \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --serve --listen_port 8000 \
+>         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+>
+>   # For AMD MI300x NVFP4/FP8 (192G x 8):
+>   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
+>       --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20250712 \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --serve --listen_port 8000 \
+>         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+> ```
+
+
+> [!TIP]
+> #### Run DeepSeek 671B in Docker (version-20250601):
 > ```sh
 > >> Example:
 >   huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
-> 
+>
 >   # For A100/A800/H100/H800/H20/H200 (80G x 8):
 >   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
 >       --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
@@ -65,7 +90,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 > >> Example:
 >   huggingface-cli download Qwen/Qwen3-235B-A22B-FP8 --local-dir Qwen/Qwen3-235B-A22B-FP8
-> 
+>
 >   # For Qwen3MoE 235B FP8 using AMD MI300 x 4:
 >   docker run -e LOCAL_SIZE=4 -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
 >       --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
