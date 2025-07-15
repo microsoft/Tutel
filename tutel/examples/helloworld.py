@@ -44,7 +44,7 @@ args = parser.parse_args()
 if args.use_tensorcore:
   torch.backends.cuda.matmul.allow_tf32 = True
 
-parallel_env = system.init_data_model_parallel(backend='nccl' if args.device == 'cuda' else 'gloo')
+parallel_env = system.init_data_model_parallel(group_count=1, backend='nccl' if args.device == 'cuda' else 'gloo')
 dist_rank, dist_world_size, dist_print = parallel_env.global_rank, parallel_env.global_size, parallel_env.dist_print
 args.local_rank = parallel_env.local_device.index
 
