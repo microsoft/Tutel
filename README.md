@@ -2,7 +2,7 @@
 
 Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors.
 
-- Supported Framework: Pytorch (recommend: >= 1.10)
+- Supported Framework: Pytorch (recommend: >= 2.0)
 - Supported GPUs: CUDA(fp64/fp32/fp16/bf16), ROCm(fp64/fp32/fp16/bf16)
 - Supported CPU: fp64/fp32
 
@@ -14,14 +14,14 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > |  ----  | ----  | ----  | ----  |
 > | $"A100 \times 8" or "A800 \times 8"$ | N/A | N/A | 85 Generation TPS (bsz = 1) |
 > | $"H100 \times 8" or "H800 \times 8"$ | N/A | N/A | 102 Generation TPS (bsz = 1) |
-> | $MI300 \times 8$  | N/A | N/A | 148 Generation TPS (bsz = 1) |
+> | $MI300 \times 8$  | N/A | N/A | 151 Generation TPS (bsz = 1) |
 > | $MI300 \times 4$ (-e LOCAL\_SIZE=4)  | N/A | N/A | 116 Generation TPS (bsz = 1) |
 
 #### DeepSeek FP8 Model: [DeepSeek-R1-0528](https://huggingface.co/deepseek-ai/DeepSeek-R1-0528) or [DeepSeek-V3-0324](https://huggingface.co/deepseek-ai/DeepSeek-V3-0324) or [DeepSeek-Prover-V2-671B](https://huggingface.co/deepseek-ai/DeepSeek-Prover-V2-671B)
 > |  ***Machine Type*** | ***TRT-LLM***  | ***SGLANG***  |  ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
 > | $"A100 \times 8" or "H100 \times 8"$ | OoM | OoM | OoM |
-> | $MI300 \times 8$  | N/A | 51 Generation TPS (bsz = 1) | 136 Generation TPS (bsz = 1) |
+> | $MI300 \times 8$  | N/A | 51 Generation TPS (bsz = 1) | 140 Generation TPS (bsz = 1) |
 
 #### Qwen3/Qwen3MoE Model: [Qwen/Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) or [Qwen/Qwen3-235B-A22B-FP8](https://huggingface.co/Qwen/Qwen3-235B-A22B-FP8)
 > |  ***Machine Type*** | ***SGL (ctx=64)***  | ***Tutel (ctx=64)***  |  ***SGL (ctx=4096)***  | ***Tutel (ctx=4096)*** |
@@ -31,16 +31,25 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 
 > [!TIP]
-> #### Run Kimi-K2 1T-param Inference in Docker (version-20250712):
+> #### Supported Inference Models: Kimi-K2 MoE (1T-param), DeepSeek R1/V3 MoE, Qwen3 MoE:
 > ```sh
 > >> Example:
+>   # Select one model for downloading, e.g.:
 >   huggingface-cli download moonshotai/Kimi-K2-Instruct --local-dir ./moonshotai/Kimi-K2-Instruct
+>   huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
+>   huggingface-cli download Qwen/Qwen3-235B-A22B-FP8 --local-dir Qwen/Qwen3-235B-A22B-FP8
+>   huggingface-cli download Qwen/Qwen3-0.6B --local-dir Qwen/Qwen3-0.6B
 >
 >   # For A100/A800/H100/H800/H20/H200 (80G x 8):
 >   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
 >       --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
 >       tutelgroup/deepseek-671b:a100x8-chat-20250712 \
 >         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
+>         --try_path ./nvidia/DeepSeek-R1-FP4 \
+>         --try_path ./deepseek-ai/DeepSeek-R1 \
+>         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
+>         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
 >         --serve --listen_port 8000 \
 >         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 >
@@ -50,32 +59,6 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20250712 \
 >         --try_path ./moonshotai/Kimi-K2-Instruct \
->         --serve --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
-> ```
-
-
-> [!TIP]
-> #### Run DeepSeek 671B in Docker (version-20250601):
-> ```sh
-> >> Example:
->   huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
->
->   # For A100/A800/H100/H800/H20/H200 (80G x 8):
->   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
->       --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
->       tutelgroup/deepseek-671b:a100x8-chat-20250601 \
->         --try_path ./nvidia/DeepSeek-R1-FP4 \
->         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./deepseek-ai/DeepSeek-R1 \
->         --serve --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
->
->   # For AMD MI300x NVFP4/FP8 (192G x 8):
->   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
->       --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
->       tutelgroup/deepseek-671b:mi300x8-chat-20250601 \
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./deepseek-ai/DeepSeek-R1 \
@@ -85,32 +68,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
 > ```
 
-> [!TIP]
-> #### Run Qwen3MoE in Docker (version-20250519):
-> ```sh
-> >> Example:
->   huggingface-cli download Qwen/Qwen3-235B-A22B-FP8 --local-dir Qwen/Qwen3-235B-A22B-FP8
->
->   # For Qwen3MoE 235B FP8 using AMD MI300 x 4:
->   docker run -e LOCAL_SIZE=4 -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
->       --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
->       -v /:/host -w /host$(pwd) tutelgroup/qwen3_moe:mi300x4-chat-20250519 \
->       --try_path ./Qwen/Qwen3-235B-A22B-FP8 \
->       --serve --listen_port 8000 \
->       --prompt "Calculate the indefinite integral of 1/sin(x) + x" --disable_thinking
-> 
->   huggingface-cli download Qwen/Qwen3-0.6B --local-dir Qwen/Qwen3-0.6B
-> 
->   # For Qwen3 0.6B BF16 using AMD MI300 x 1:
->   docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 --ulimit stack=67108864 \
->       --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
->       -v /:/host -w /host$(pwd) tutelgroup/qwen3_moe:mi300x4-chat-20250519 \
->       --try_path ./Qwen/Qwen3-0.6B \
->       --try_path ./Qwen/Qwen3-8B \
->       --try_path ./Qwen/Qwen3-32B \
->       --serve --listen_port 8000 \
->       --prompt "Calculate the indefinite integral of 1/sin(x) + x" --disable_thinking
-> ```
+#### More Versions can be found [here](https://hub.docker.com/r/tutelgroup/deepseek-671b)
 
 
 ## What's New:
