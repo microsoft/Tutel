@@ -10,6 +10,7 @@ import time
 import logging 
 import collections
 import importlib
+from functools import lru_cache
 
 import torch
 from torch import Tensor
@@ -78,6 +79,7 @@ class MOELayer(torch.nn.Module):
         return super().state_dict(destination=destination, prefix=prefix, keep_vars=keep_vars)
 
     @property
+    @lru_cache
     def num_global_experts(self):
         return int(self._num_global_experts)
 

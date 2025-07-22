@@ -16,6 +16,7 @@ def torch_cumsum_sub_one(mask1):
 
 has_extension = hasattr(torch.ops.tutel_ops, 'cumsum')
 
+@torch.compiler.disable(recursive=True)
 def fast_cumsum_sub_one(data, dim=0):
   if data.dim() != 2 or dim != 0:
     raise Exception("Unimplemented fast_cumsum_sub_one() of data = %s and dim = %s" % (data.size(), dim))
