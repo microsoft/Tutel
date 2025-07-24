@@ -34,48 +34,55 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > #### Supported Inference Models: Kimi-K2 MoE (1T-param), DeepSeek R1/V3 MoE, Qwen3 MoE:
 > ```sh
 > >> Example:
->   # Select one model for downloading, e.g.:
->   huggingface-cli download moonshotai/Kimi-K2-Instruct --local-dir ./moonshotai/Kimi-K2-Instruct
->   huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir ./nvidia/DeepSeek-R1-FP4
->   huggingface-cli download Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 --local-dir Qwen/Qwen3-235B-A22B-Instruct-2507-FP8
->   huggingface-cli download Qwen/Qwen3-0.6B --local-dir Qwen/Qwen3-0.6B
+> # Select one model for downloading, e.g.:
+> huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
+> huggingface-cli download Danucore/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir Danucore/Qwen3-235B-A22B-Instruct-2507-FP4
 >
->   # For A100/A800/H100/H800/H20/H200 (80G x 8):
->   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
+> huggingface-cli download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
+> huggingface-cli download Qwen/Qwen3-30B-A3B-FP8 --local-dir Qwen/Qwen3-30B-A3B-FP8
+> huggingface-cli download Qwen/Qwen3-0.6B --local-dir Qwen/Qwen3-0.6B
+> huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
+>
+> # For A100/A800/H100/H800/H20/H200 (80G x 8):
+> docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
 >       --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
 >       tutelgroup/deepseek-671b:a100x8-chat-20250723 \
+>         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
+>         --serve --listen_port 8000 \
 >         --try_path ./moonshotai/Kimi-K2-Instruct \
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./deepseek-ai/DeepSeek-R1 \
 >         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
 >         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
+>         --try_path ./Danucore/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
+>         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
 >         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
 >         --try_path ./Qwen/Qwen3-32B-FP8 \
 >         --try_path ./Qwen/Qwen3-32B \
->         --try_path ./Qwen/Qwen3-0.6B \
->         --serve --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+>         --try_path ./Qwen/Qwen3-0.6B
 >
->   # For AMD MI300x NVFP4/FP8 (192G x 8):
->   docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
+> # For AMD MI300x NVFP4/FP8 (192G x 8):
+> docker run -it --rm --ipc=host --net=host --shm-size=8g --ulimit memlock=-1 \
 >       --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20250723 \
+>         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
+>         --serve --listen_port 8000 \
 >         --try_path ./moonshotai/Kimi-K2-Instruct \
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./deepseek-ai/DeepSeek-R1 \
 >         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
 >         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
+>         --try_path ./Danucore/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
+>         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
 >         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
 >         --try_path ./Qwen/Qwen3-32B-FP8 \
 >         --try_path ./Qwen/Qwen3-32B \
->         --try_path ./Qwen/Qwen3-0.6B \
->         --serve --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+>         --try_path ./Qwen/Qwen3-0.6B
 > ```
 
 #### More Versions can be found [here](https://hub.docker.com/r/tutelgroup/deepseek-671b)

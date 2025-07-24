@@ -1158,7 +1158,6 @@ std::tuple<torch::Tensor, torch::Tensor> warp_qwen3_moe_top_8_static(
   CHECK_EQ(logits_fp32.dtype(), torch::kFloat32);
 
   int n_experts = logits_fp32.size(-1);
-  AT_ASSERTM(n_experts == 128, "Qwen3MoE requires 128 experts for gating.");
   int samples = logits_fp32.numel() / n_experts;
 
   auto device = logits_fp32.device();
