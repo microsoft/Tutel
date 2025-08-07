@@ -5,31 +5,66 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported Framework: Pytorch (recommend: >= 2.0)
 - Supported GPUs: CUDA(fp64/fp32/fp16/bf16), ROCm(fp64/fp32/fp16/bf16)
 - Supported CPU: fp64/fp32
-- The First to Support DeepSeek 671B NVFP4 Inference using A100/A800/H100/MI300 resources.
-- Fastest "Thinking" on MI300X: Complete a 4K reasoning answer in 39 sec, compared with SGLANG in 1 min 35 sec.
+- Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
 #### Supported Inference Models: DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/.. (Decoding TPS, bsz = 1):
-> |  ***Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
+> |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ A100 \times 8)$ | fp4g16 | N/A | 92 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ H100 \times 8)$ | fp4g16 | N/A | 134 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 8)$ | fp4g16 | N/A | 151 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 4)$ | fp4g16 | N/A | 116 |
+> | $openai/gpt-oss-20b\ (20B,\ A100 \times 1)$ | mxfp4 | -- | 209 |
+> | $openai/gpt-oss-20b\ (20B,\ MI300 \times 1)$ | mxfp4 | 193 | 315 |
+> | $openai/gpt-oss-120b\ (120B,\ A100 \times 1)$ | mxfp4 | -- | 146 |
+> | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | -- | 218 |
+> | $nvidia/DeepSeek-R1-FP4\ (671B,\ A100 \times 8)$ | nvfp4 | N/A | 92 |
+> | $nvidia/DeepSeek-R1-FP4\ (671B,\ H100 \times 8)$ | nvfp4 | N/A | 134 |
+> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 8)$ | nvfp4 | N/A | 151 |
+> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 4)$ | nvfp4 | N/A | 116 |
 > | $deepseek-ai/DeepSeek-V3-0324\ (671B,\ MI300 \times 8)$ | fp8b128 | 48 | 145 |
 > | $moonshotai/Kimi-K2-Instruct\ (1T,\ MI300 \times 8)$ | fp8b128 | 49 | 153 |
-> | $moonshotai/Kimi-K2-Instruct\ (1T,\ A100 \times 8)$ | fp4g16 | N/A | 93 |
+> | $moonshotai/Kimi-K2-Instruct\ (1T,\ A100 \times 8)$ | nvfp4 | N/A | 93 |
 > | $Qwen/Qwen3MoE-235B-FP8\ (MI300 \times 4)$ | fp8b128 | 41 |99 |
 > | $Qwen/Qwen3-30B-A3B-FP8\ (A100 \times 1)$ | fp8b128 | N/A | 161 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4\ (A100 \times 8)$ | fp4g16 | N/A | 96 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4\ (A100 \times 4)$ | fp4g16 | N/A | 79 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4\ (MI300 \times 8)$ | fp4g16 | N/A | 122 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4\ (MI300 \times 4)$ | fp4g16 | N/A | 101 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4\ (MI300 \times 1)$ | fp4g16 | N/A | 56 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(A100\times8)$ | nvfp4 | N/A | 96 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(A100\times4)$ | nvfp4 | N/A | 79 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times8)$ | nvfp4 | N/A | 122 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times4)$ | nvfp4 | N/A | 101 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times1)$ | nvfp4 | N/A | 56 |
 > | $Qwen/Qwen3-0.6B\ (MI300 \times 1)$ | bf16 | 667 | 798 |
 > 
 
 > [!TIP]
-> #### News: Image-version *20250801* integrates [OpenWebUI](https://github.com/open-webui/open-webui) by specifying `--serve=webui` ✅
+> #### News: Initial support of OAI GPT-OSS 20/120B with direct MXFP4 inference since *20250808*
+> 
+> ```sh
+> 
+> # Step-1: Select one model for downloading, e.g.:
+> >> pip3 install -U "huggingface_hub[cli]" --upgrade
+> >> hf download openai/gpt-oss-20b --local-dir ./openai/gpt-oss-20b
+> >> hf download openai/gpt-oss-120b --local-dir ./openai/gpt-oss-120b
+>
+> # Step-2(a): For Single NVIDIA A100/A800/.. (80G x 1):
+> >> docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --shm-size=8g -p 8000:8000 \
+>      --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
+>      -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
+>      tutelgroup/deepseek-671b:a100x8-chat-20250808 --serve=webui --listen_port 8000 \
+>        --try_path ./openai/gpt-oss-20b \
+>        --try_path ./openai/gpt-oss-120b \
+>        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+>
+> # Step-2(b): For Single AMD MI300x/.. (192G x 1):
+> >> docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --shm-size=8g -p 8000:8000 \
+>      --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
+>      --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
+>      tutelgroup/deepseek-671b:mi300x8-chat-20250808 --serve=webui --listen_port 8000 \
+>        --try_path ./openai/gpt-oss-20b \
+>        --try_path ./openai/gpt-oss-120b \
+>        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
+>
+> # Step-3: Open Open-WebUI from Browsers (Edge/Chromium/Firefox/..):
+> >> x-www-browser http://0.0.0.0:8000/
+> ```
+
+> [!TIP]
+> #### Image-version *20250801* integrates [OpenWebUI](https://github.com/open-webui/open-webui) by specifying `--serve=webui` ✅
 > 
 > *Steps for "Model Downloading" => "NVIDIA/AMD GPU Serving" => "Browser Login to listen_port":*
 > ```sh

@@ -136,7 +136,8 @@ namespace ab {
     init(-1);
     const char* data = binary.data();
     CUmodule hmod = nullptr;
-    CHECK_OK(0 == cuModuleLoadData(&hmod, data));
+    if (0 != cuModuleLoadData(&hmod, data))
+      return nullptr;
     return hmod;
   }
 

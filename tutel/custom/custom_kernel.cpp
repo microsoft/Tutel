@@ -986,12 +986,12 @@ std::tuple<torch::Tensor, torch::Tensor> warp_to_float8_per_token(const torch::T
   return {fp8_w, scal.view(fp8_w.narrow(-1, 0, fp8_w.size(-1) / 128).sizes())};
 }
 
-torch::Tensor warp_scaled_softmax_inv(const torch::Tensor &x, const torch::Tensor &range, double scale_inv) {
+torch::Tensor warp_scaled_mask_inv(const torch::Tensor &x, const torch::Tensor &range, double scale_inv) {
   CHECK_CUDA(x);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
   CHECK_EQ(range.dtype(), torch::kInt32);
   auto out = antares::ops::call("scaled_mask_inv_bf16", {x.view({-1, x.size(-1)}), range}, {(float)scale_inv}).view(x.sizes());
-  return at::softmax(out, -1);
+  return out;
 }
 
 torch::Tensor warp_topk_token_sort(
@@ -1019,21 +1019,6 @@ torch::Tensor warp_scatter_sample_ids(const torch::Tensor &expert_ids, const tor
 }
 
 
-torch::Tensor warp_to_float32(const torch::Tensor &w, const torch::Tensor &scal) {
-  CHECK_CUDA(w);
-  CHECK_CUDA(scal);
-
-  auto w_ = w, scal_ = scal;
-  if (w_.dim() < 3)
-    w_ = w_.unsqueeze(0), scal_ = scal_.unsqueeze(0);
-  CHECK_EQ(w_.dim(), 3);
-  CHECK_EQ(scal_.dim(), 3);
-  w_ = antares::ops::call("to_float32_3d", {w_, scal_}, {});
-  if (w.dim() < 3)
-    w_ = w_.squeeze(0);
-  return w_;
-}
-
 torch::Tensor warp_to_bfloat16(const torch::Tensor &w, const torch::Tensor &scal) {
   CHECK_CUDA(w);
   if (w.dtype() == torch::kBFloat16)
@@ -1051,7 +1036,13 @@ torch::Tensor warp_to_bfloat16(const torch::Tensor &w, const torch::Tensor &scal
       w_ = (w_.to(torch::kFloat32) * scal_.unsqueeze(-2)).to(torch::kBFloat16);
   } else {
     CHECK_EQ(scal_.dim(), 3);
-    w_ = antares::ops::call("to_bfloat16_3d", {w_, scal_}, {});
+    auto padded_w = torch::empty({w_.size(0), (w_.size(1) + 127) / 128, 128, (w_.size(2) + 127) / 128, 128}, torch::TensorOptions().dtype(w_.dtype()).device(w_.device()));
+    CHECK_EQ(padded_w.size(0), scal_.size(0));
+    CHECK_EQ(padded_w.size(1), scal_.size(1));
+    CHECK_EQ(padded_w.size(3), scal_.size(2));
+    padded_w.flatten(1, 2).flatten(2, 3).narrow(1, 0, w_.size(1)).narrow(2, 0, w_.size(2)).copy_(w_);
+    padded_w = padded_w.view(at::kFloat8_e4m3fn).to(torch::kBFloat16) * scal_.to(torch::kBFloat16).view({scal_.size(0), scal_.size(1), 1, scal_.size(2), 1});
+    w_ = padded_w.flatten(1, 2).flatten(2, 3).narrow(1, 0, w_.size(1)).narrow(2, 0, w_.size(2)).contiguous();
   }
   if (w.dim() < 3)
     w_ = w_.squeeze(0);
@@ -1264,7 +1255,7 @@ torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal_v2(
     {
       auto C = key_cache.narrow(0, 0, max_pos + seqlen);
       auto S = at::einsum("bshc,tbc->bsht", {Q, C});
-      auto T = warp_scaled_softmax_inv(S, kv_range, softmax_scale);
+      auto T = at::softmax(warp_scaled_mask_inv(S, kv_range, softmax_scale), -1);
       Q = at::einsum("bsht,tbc->bshc", {T, C}).narrow(-1, 0, 512);
       Q = at::einsum("bshc,hdc->bshd", {Q, wvc}); // .contiguous();
     }
@@ -1578,10 +1569,9 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("deepseek_moe_sigmoid_scaled_topk", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
   m.def("to_bfloat16", warp_to_bfloat16);
-  m.def("to_float32", warp_to_float32);
   m.def("to_float8_block", warp_to_float8_block);
   m.def("to_float8_per_token", warp_to_float8_per_token);
-  m.def("scaled_softmax_inv", warp_scaled_softmax_inv);
+  m.def("scaled_mask_inv", warp_scaled_mask_inv);
   m.def("topk_token_sort", warp_topk_token_sort);
   m.def("scatter_sample_ids", warp_scatter_sample_ids);
   m.def("copy_to_device", warp_copy_to_device);

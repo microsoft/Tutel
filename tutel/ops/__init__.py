@@ -51,6 +51,16 @@ def from_float4_groupwise(w, scale, scale_2, input_scale=None):
   w = fp4_e2m1_table.index_select(0, w.flatten()).view(*scale.shape, -1) * scale.bfloat16().unsqueeze(scale.dim())
   return w.flatten(-2) * scale_2
 
+def from_mxfp4(p):
+  w = p.to(torch.int16)
+  fp4_e2m1_table = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.float32, device=w.device)
+  w = ((w & 15) + ((w >> 4) << 8)).view(torch.int8).to(torch.int32)
+  w = fp4_e2m1_table.index_select(0, w.flatten()).view(*p.scales.shape, -1)
+  s = torch.pow(2.0, p.scales.view(torch.int8) - 127).view(*w.shape[:-1], -1)
+  w = (w * s).bfloat16().flatten(-2)
+  w.bias = p.bias
+  return w
+
 
 def __getattr__(name):
     fn = getattr(torch.ops.tutel_ops, name)

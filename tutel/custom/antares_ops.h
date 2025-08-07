@@ -155,7 +155,10 @@ at::Tensor call(const void *key, const std::vector<at::Tensor> &ts, const std::v
     }
 
     kernels[key_id] = {}, it = kernels.find(key_id);
-    it->second.symbol = ab::moduleGetFunction(ab::moduleLoad(data), fentry, th);
+    void *hmod = ab::moduleLoad(data);
+    AT_ASSERTM(hmod != nullptr, "The module file is not recognized: ", fname);
+
+    it->second.symbol = ab::moduleGetFunction(hmod, fentry, th);
     it->second.entry_name = fentry;
     it->second.name = fname;
 
