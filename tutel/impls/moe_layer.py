@@ -305,7 +305,7 @@ class MOELayer(torch.nn.Module):
             return logits.dtype, extract_critical(scores,
                 top_k = top_k,
                 loss_fn = _loss_fn,
-                capacity_factor = capacity_factor or gctx.capacity_factor,
+                capacity_factor = capacity_factor if capacity_factor is not None else gctx.capacity_factor,
                 batch_prioritized_routing = self.batch_prioritized_routing,
                 normalize_gate = self.normalize_gate,
                 group = self.group,
