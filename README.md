@@ -10,10 +10,12 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### Supported Inference Models: DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/.. (Decoding TPS, bsz = 1):
 > |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
-> | $openai/gpt-oss-20b\ (20B,\ A100 \times 1)$ | mxfp4 | -- | 209 |
-> | $openai/gpt-oss-20b\ (20B,\ MI300 \times 1)$ | mxfp4 | 193 | 315 |
-> | $openai/gpt-oss-120b\ (120B,\ A100 \times 1)$ | mxfp4 | -- | 146 |
-> | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | -- | 218 |
+> | $openai/gpt-oss-20b\ (20B,\ MI300 \times 1)$ | mxfp4 | 193 | 412 |
+> | $openai/gpt-oss-20b\ (20B,\ A100 \times 1)$ | mxfp4 | 160 | 241 |
+> | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | N/A | 284 |
+> | $openai/gpt-oss-120b\ (120B,\ A100 \times 1)$ | mxfp4 | 108 | 167 |
+> | $openai/gpt-oss-120b\ (120B,\ A100 \times 2)$ | mxfp4 | 147 | 218 |
+> | $openai/gpt-oss-120b\ (120B,\ A100 \times 4)$ | mxfp4 | 184 | 273 |
 > | $nvidia/DeepSeek-R1-FP4\ (671B,\ A100 \times 8)$ | nvfp4 | N/A | 92 |
 > | $nvidia/DeepSeek-R1-FP4\ (671B,\ H100 \times 8)$ | nvfp4 | N/A | 134 |
 > | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 8)$ | nvfp4 | N/A | 151 |
@@ -32,7 +34,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > 
 
 > [!TIP]
-> #### News: Initial support of OAI GPT-OSS 20/120B with direct MXFP4 inference since *20250808*
+> #### News: Add distributed support for OpenAI GPT-OSS 20B/120B with MXFP4 inference since *20250827*
 > 
 > ```sh
 > 
@@ -45,7 +47,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > >> docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --shm-size=8g -p 8000:8000 \
 >      --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >      -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->      tutelgroup/deepseek-671b:a100x8-chat-20250808 --serve=webui --listen_port 8000 \
+>      tutelgroup/deepseek-671b:a100x8-chat-20250827 --serve=webui --listen_port 8000 \
 >        --try_path ./openai/gpt-oss-20b \
 >        --try_path ./openai/gpt-oss-120b \
 >        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
@@ -54,7 +56,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > >> docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --shm-size=8g -p 8000:8000 \
 >      --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
 >      --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->      tutelgroup/deepseek-671b:mi300x8-chat-20250808 --serve=webui --listen_port 8000 \
+>      tutelgroup/deepseek-671b:mi300x8-chat-20250827 --serve=webui --listen_port 8000 \
 >        --try_path ./openai/gpt-oss-20b \
 >        --try_path ./openai/gpt-oss-120b \
 >        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
