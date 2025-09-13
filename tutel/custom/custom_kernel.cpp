@@ -1500,6 +1500,8 @@ torch::Tensor warp_copy_to_device(const std::vector<torch::Tensor> &data) {
   return out;
 }
 
+namespace specialized {
+
 torch::Tensor warp_glu_expert_bf16xf8_block_scal_16x16_fnuz(
   const torch::Tensor &x,
   const torch::Tensor &expert_ids,
@@ -1540,6 +1542,87 @@ torch::Tensor warp_glu_expert_bf16xf8_block_scal_16x16_fnuz(
   return yb;
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16_v2(
+  const torch::Tensor &qkv_act,
+  const torch::Tensor &cos_sin,
+  const torch::Tensor &positions,
+  const torch::Tensor &q_a_norm,
+  const torch::Tensor &kv_a_norm,
+  const torch::Tensor &q_b_proj,
+  const torch::Tensor &k_b_proj,
+  int64_t n_local_heads
+) {
+  auto x = qkv_act;
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(x.dim(), 3);
+  CHECK_EQ(x.size(-1), 2112);
+  CHECK_EQ(cos_sin.dtype(), torch::kInt64);
+  CHECK_EQ(positions.dtype(), torch::kInt64);
+
+  int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
+  int samples = batch * seqlen;
+
+  auto q = warp_rmsnorm_bf16(x, q_a_norm, 1e-6f);
+  auto v_output = warp_rmsnorm_bf16(x, kv_a_norm, 1e-6f, 1536); // [B, S, 512]
+  auto k_output = antares::ops::call("rope_kt_bf16", {v_output.view({-1, 8, 64}).view(torch::kInt32), cos_sin, x.view({-1, 33, 64}).view(torch::kInt32), positions}, {}).view(torch::kBFloat16).view({batch, seqlen, 576});
+
+  auto &w_q_b_proj = q_b_proj;
+  CHECK_EQ(w_q_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(w_q_b_proj.dim(), 2);
+  CHECK_EQ(k_b_proj.dtype(), torch::kBFloat16);
+  CHECK_EQ(k_b_proj.dim(), 3);
+  CHECK_CONTIGUOUS(k_b_proj.transpose(1, 2));
+
+  auto q_output = torch::empty({batch, seqlen, n_local_heads, 512 + 64}, torch::TensorOptions().dtype(q.dtype()).device(q.device()));
+  torch::Tensor qh = (IS_NVIDIA_GPU || samples >= 4) ? torch::matmul(q, w_q_b_proj.t()).view({samples, n_local_heads, -1}) : \
+    antares::ops::call("rope_gmv_bf16", {q.view({samples, -1}).view(torch::kInt32), w_q_b_proj.view(torch::kInt32)}, {}).view({samples, n_local_heads, -1}); // (BS, 1536) @ (3072, 1536)
+  auto buffer = q_output.flatten(0, 1).transpose(0, 1).narrow(-1, 0, 512);
+  torch::matmul_out(buffer, qh.transpose(0, 1).narrow(-1, 0, 128), k_b_proj);
+
+  antares::ops::call("rope_qt_bf16_put", {cos_sin, qh.view({qh.size(0), -1, 3, 64}).view(torch::kInt32), positions, q_output.view({qh.size(0), -1, 9, 64}).view(torch::kInt32)}, {});
+  return {q_output, k_output, v_output};
+}
+
+torch::Tensor warp_gemm_nt_bf16xfp8_block_scal(const torch::Tensor &x, const torch::Tensor &w, const torch::Tensor &scal, int64_t policy = 0) {
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dim(), 3);
+  CHECK_EQ(x.dtype(), torch::kBFloat16);
+  CHECK_EQ(w.dim(), 2);
+
+  int samples = x.size(0) * x.size(1);
+  if (w.dtype() == torch::kBFloat16)
+    return torch::matmul(x.view({samples, x.size(2)}), w.t()).view({x.size(0), x.size(1), w.size(0)});
+
+  if (scal.dim() == 1) {
+    CHECK_EQ(w.size(0), scal.size(0));
+    return antares::ops::call("gemv_nt_bf16xfp8_row", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(torch::kInt16), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
+  }
+
+  CHECK_EQ(scal.dim(), 2);
+  if (samples < 4)
+    return antares::ops::call("gemv_nt_bf16xfp8_block", {x.view({samples, x.size(2)}).view(torch::kInt32), w.view(torch::kInt16), scal}, {}).view({x.size(0), x.size(1), w.size(0)});
+
+  torch::Tensor w_ = w;
+
+  if (policy == 0) {
+    static std::unordered_map<void*, torch::Tensor> cached;
+
+    auto dptr = scal.data_ptr();
+    auto it = cached.find(dptr);
+    if (it == cached.end()) {
+      cached[dptr] = antares::ops::call("to_bfloat16_3d", {w.unsqueeze(0), scal.unsqueeze(0)}, {}).squeeze(0);
+      it = cached.find(dptr);
+    }
+    w_ = it->second;
+  } else {
+    w_ = antares::ops::call("to_bfloat16_3d", {w.unsqueeze(0), scal.unsqueeze(0)}, {}).squeeze(0);
+  }
+  return torch::matmul(x.view({samples, x.size(2)}), w_.t()).view({x.size(0), x.size(1), w.size(0)});
+}
+
+}
+
 #endif
 
 
@@ -1576,7 +1659,9 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("scatter_sample_ids", warp_scatter_sample_ids);
   m.def("copy_to_device", warp_copy_to_device);
 
-  m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", warp_glu_expert_bf16xf8_block_scal_16x16_fnuz);
+  m.def("multi_head_latent_rope_bf16_v2", specialized::warp_multi_head_latent_rope_bf16_v2);
+  m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", specialized::warp_glu_expert_bf16xf8_block_scal_16x16_fnuz);
+  m.def("gemm_nt_bf16xfp8_block_scal", specialized::warp_gemm_nt_bf16xfp8_block_scal);
 #endif
 }
 #endif
