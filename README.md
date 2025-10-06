@@ -7,7 +7,74 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported CPU: fp64/fp32
 - Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
-#### Supported Inference Models: DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/.. (Decoding TPS, bsz = 1):
+> [!TIP]
+> #### News: Add compatiblity with DeepSeek-3.2-Exp inference in dense format since *image-20251006*
+> 
+> *Steps for "Model Downloading" => "NVIDIA/AMD GPU Serving" => "Browser Login to listen_port":*
+> ```sh
+> 
+> # Step-1: Select one model for downloading, e.g.:
+> pip3 install -U "huggingface_hub[cli]" --upgrade
+>
+> hf download deepseek-ai/DeepSeek-V3.2-Exp --local-dir deepseek-ai/DeepSeek-V3.2-Exp
+> hf download openai/gpt-oss-120b --local-dir openai/gpt-oss-120b
+> hf download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
+> hf download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
+> hf download NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4
+> hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir Qwen/Qwen3-30B-A3B-FP8
+>
+> # Step-2 for NVIDIA GPUs: A100/A800/H100/H800/H20/H200 (80G x 8):
+> docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
+>       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
+>       tutelgroup/deepseek-671b:a100x8-chat-20251006 --serve=webui --listen_port 8000 \
+>         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
+>         --try_path ./openai/gpt-oss-20b \
+>         --try_path ./openai/gpt-oss-120b \
+>         --try_path ./deepseek-ai/DeepSeek-V3.2-Exp \
+>         --try_path ./deepseek-ai/DeepSeek-R1 \
+>         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
+>         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
+>         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --try_path ./nvidia/DeepSeek-R1-FP4 \
+>         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
+>         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
+>         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
+>         --try_path ./Qwen/Qwen3-30B-A3B-FP8
+>
+> # Step-2 for AMD GPUs: MI300x NVFP4/FP8 (192G x 8):
+> docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20251006 --serve=webui --listen_port 8000 \
+>         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
+>         --try_path ./openai/gpt-oss-20b \
+>         --try_path ./openai/gpt-oss-120b \
+>         --try_path ./deepseek-ai/DeepSeek-V3.2-Exp \
+>         --try_path ./deepseek-ai/DeepSeek-R1 \
+>         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
+>         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
+>         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --try_path ./nvidia/DeepSeek-R1-FP4 \
+>         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
+>         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
+>         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
+>         --try_path ./Qwen/Qwen3-30B-A3B-FP8
+>
+> # Step-3: Choose one of methods for prompt requests:
+>     # Open UI using web browsers (Edge/Chromium/Firefox/..)
+>     x-www-browser http://0.0.0.0:8000/
+>
+>     # Direct response to stdout:
+>     curl -X POST http://0.0.0.0:8000/chat -d '{"text": "Given x + 1/x = 1, calculate x^2016 + 1/(x^2016)."}'
+>
+>     # Using OpenAI client interface:
+>     python3 -m tutel.examples.oai_request --url '0.0.0.0:8000' --prompt 'Hello.'
+> ```
+
+#### Inference Models: DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/.. (output tps/bsz = 1):
 > |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
 > | $openai/gpt-oss-20b\ (20B,\ MI300 \times 1)$ | mxfp4 | 193 | 412 |
@@ -33,99 +100,20 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > | $Qwen/Qwen3-0.6B\ (MI300 \times 1)$ | bf16 | 667 | 798 |
 > 
 
-> [!TIP]
-> #### News: Add distributed support for OpenAI GPT-OSS 20B/120B with MXFP4 inference since *20250827*
-> 
-> ```sh
-> 
-> # Step-1: Select one model for downloading, e.g.:
-> >> pip3 install -U "huggingface_hub[cli]" --upgrade
-> >> hf download openai/gpt-oss-20b --local-dir ./openai/gpt-oss-20b
-> >> hf download openai/gpt-oss-120b --local-dir ./openai/gpt-oss-120b
->
-> # Step-2(a): For Single NVIDIA A100/A800/.. (80G x 1):
-> >> docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --shm-size=8g -p 8000:8000 \
->      --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
->      -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->      tutelgroup/deepseek-671b:a100x8-chat-20250827 --serve=webui --listen_port 8000 \
->        --try_path ./openai/gpt-oss-20b \
->        --try_path ./openai/gpt-oss-120b \
->        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
->
-> # Step-2(b): For Single AMD MI300x/.. (192G x 1):
-> >> docker run -e LOCAL_SIZE=1 -it --rm --ipc=host --shm-size=8g -p 8000:8000 \
->      --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
->      --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->      tutelgroup/deepseek-671b:mi300x8-chat-20250827 --serve=webui --listen_port 8000 \
->        --try_path ./openai/gpt-oss-20b \
->        --try_path ./openai/gpt-oss-120b \
->        --prompt "Calculate the indefinite integral of 1/sin(x) + x"
->
-> # Step-3: Open Open-WebUI from Browsers (Edge/Chromium/Firefox/..):
-> >> x-www-browser http://0.0.0.0:8000/
-> ```
-
-> [!TIP]
-> #### Image-version *20250801* integrates [OpenWebUI](https://github.com/open-webui/open-webui) by specifying `--serve=webui` ✅
-> 
-> *Steps for "Model Downloading" => "NVIDIA/AMD GPU Serving" => "Browser Login to listen_port":*
-> ```sh
-> 
-> # Step-1: Select one model for downloading, e.g.:
-> huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
-> huggingface-cli download NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4
->
-> huggingface-cli download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
-> huggingface-cli download Qwen/Qwen3-30B-A3B-FP8 --local-dir Qwen/Qwen3-30B-A3B-FP8
-> huggingface-cli download Qwen/Qwen3-0.6B --local-dir Qwen/Qwen3-0.6B
-> huggingface-cli download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
->
-> # Step-2(a): For NVIDIA A100/A800/H100/H800/H20/H200 (80G x 8):
-> docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 --gpus=all -v /:/host -w /host$(pwd) \
->       tutelgroup/deepseek-671b:a100x8-chat-20250801 --serve=webui --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
->         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./nvidia/DeepSeek-R1-FP4 \
->         --try_path ./deepseek-ai/DeepSeek-R1 \
->         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
->         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
->         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
->         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
->         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
->         --try_path ./Qwen/Qwen3-32B-FP8 \
->         --try_path ./Qwen/Qwen3-32B \
->         --try_path ./Qwen/Qwen3-0.6B
->
-> # Step-2(b): For AMD MI300x NVFP4/FP8 (192G x 8):
-> docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
->       tutelgroup/deepseek-671b:mi300x8-chat-20250801 --serve=webui --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
->         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./nvidia/DeepSeek-R1-FP4 \
->         --try_path ./deepseek-ai/DeepSeek-R1 \
->         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
->         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
->         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
->         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
->         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
->         --try_path ./Qwen/Qwen3-32B-FP8 \
->         --try_path ./Qwen/Qwen3-32B \
->         --try_path ./Qwen/Qwen3-0.6B
->
-> # Step-3: Open Open-WebUI from Browsers (Edge/Chromium/Firefox/..):
->     x-www-browser http://0.0.0.0:8000/
-> ```
-
-#### More image versions can be found [here](https://hub.docker.com/r/tutelgroup/deepseek-671b/tags)
 
 ## What's New:
+
+> Image-*20251006*: Resolve compatibility with DeepSeek-V3.2-Exp
+>
+> Image-*20250827*: Add distributed support for OpenAI GPT-OSS 20B/120B with MXFP4 inference
+>
+> Image-*20250801*: Support Qwen3 MoE series, integrate [OpenWebUI](https://github.com/open-webui/open-webui)
+>
+> Image-*20250712*: Support Kimi K2 1TB MoE inference with NVFP4 for NVIDIA/AMD GPUs
+>
+> Image-*20250601*: Improved decoding performance for DeepSeek 671B on MI300x to 140-150 TPS
+>
+> More image versions can be found [here](https://hub.docker.com/r/tutelgroup/deepseek-671b/tags)
 
 > Tutel v0.4.2: Add R1-FP4/Qwen3MoE-FP8 Support for NVIDIA and AMD GPUs & Fast Gating APIs:
 ```py

@@ -131,6 +131,8 @@ def create_groups_from_world(group_count, include_init=None, parent_group=None):
     else:
         model_group, data_group, global_group = None, None, None
 
+    tutel_custom_kernel.put_pg_storage(0, global_group)
+
     result = DistributedProperties()
 
     result.global_size = glob_world_size

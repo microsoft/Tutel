@@ -2,7 +2,9 @@
 // Licensed under the MIT license.
 
 #include <torch/extension.h>
+#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 #include <torch/csrc/distributed/c10d/ProcessGroupGloo.hpp>
+#include <torch/csrc/distributed/c10d/TCPStore.hpp>
 
 #if defined(USE_GPU)
 #include <ATen/cuda/CUDAContext.h>
@@ -286,6 +288,13 @@ static void invoke(const std::vector<torch::Tensor> &ts, const std::vector<long>
 
 } // namespace jit
 #endif
+
+static std::unordered_map<int64_t, c10::intrusive_ptr<c10d::ProcessGroup>> _pg_storage;
+
+static void put_pg_storage(int64_t key, pybind11::object pg_obj) {
+    auto pg = pybind11::cast<c10::intrusive_ptr<c10d::ProcessGroup>>(pg_obj);
+    _pg_storage[key] = pg;
+}
 
 template<typename dtype> static void invoke_cpu(const std::vector<torch::Tensor> &ts, const std::vector<int> &extra, int kernel_type) {
   int samples = extra[0];
@@ -763,9 +772,9 @@ static torch::Tensor nccl_all_to_all_2d_async(torch::Tensor &input) {
 
 #endif
 
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #if defined(USE_GPU)
-
     m.def("update_sdk_home",
         &jit::update_sdk_home,
         "Configure SDK HOME Path for GPU (CUDA)"
@@ -779,6 +788,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "Inject Source for GPU (CUDA)"
     );
 #endif
+    m.def("put_pg_storage", &put_pg_storage);
+
     m.def("invoke_cpu_fp32",
         &invoke_cpu<float>,
         "Invoke for Sparse Ops (CPU)"
@@ -924,8 +935,77 @@ static int get_world_rank() {
   return (world_rank);
 }
 
+static at::Tensor all_gather_native(const at::Tensor &input) {
+  auto it = _pg_storage.find(0);
+  CHECK_NE(it, _pg_storage.end());
+  auto pg = it->second;
+  if (pg.get() == nullptr)
+    return input;
+
+  auto shape = input.sizes().vec();
+  size_t size_per_group = shape[0];
+  shape[0] *= pg->getSize();
+  auto output = torch::empty(shape, torch::TensorOptions().dtype(input.dtype()).device(input.device()));
+
+  std::vector<at::Tensor> inputs = {input};
+  std::vector<std::vector<at::Tensor>> outputs(inputs.size());
+  for (int i = 0; i < output.size(0); ++i)
+    outputs[0].push_back(output.narrow(0, i * size_per_group, size_per_group));
+  c10::intrusive_ptr<c10d::Work> work = pg->allgather(outputs, inputs);
+  work->wait();
+
+  return output;
+}
+
+static std::tuple<torch::Tensor, torch::Tensor> uncached_empty_ex(torch::IntArrayRef shape, at::ScalarType dtype) {
+  int64_t size = std::accumulate(shape.begin(), shape.end(), 1LL, std::multiplies<int64_t>()) * torch::elementSize(dtype);
+
+  auto device_index = c10::cuda::current_device();
+  at::DeviceGuard device_guard(at::Device(at::DeviceType::CUDA, device_index));
+  void* buffer = nullptr;
+  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
+  auto stream = c10::cuda::getCurrentCUDAStream().stream();
+  AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+
+#if defined(USE_ROCM)
+  AT_CUDA_CHECK(hipExtMallocWithFlags((void**)&buffer, size, hipDeviceMallocUncached));
+#else
+  AT_CUDA_CHECK(cudaMalloc((void**)&buffer, size));
+#endif
+  AT_CUDA_CHECK(cudaMemsetAsync(buffer, 0, size, stream));
+  AT_CUDA_CHECK(cudaStreamSynchronize(stream));
+  AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
+  auto t = torch::from_blob(buffer, shape, torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
+  CHECK_EQ(t.data_ptr(), buffer);
+
+  auto options = torch::TensorOptions().dtype(torch::kUInt8);
+  auto handle = torch::empty({1, static_cast<int64_t>(sizeof(cudaIpcMemHandle_t))}, options.device(torch::kCPU));
+  AT_CUDA_CHECK(cudaIpcGetMemHandle((cudaIpcMemHandle_t*)handle.data_ptr(), buffer));
+
+  auto handles = all_gather_native(handle);
+  int rank = get_world_rank();
+
+  CHECK_EQ(handles.dim(), 2);
+  int scope_size = handles.size(0);
+  auto pointers = torch::empty({scope_size}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+
+  for (int i = 0; i < scope_size; ++i) {
+    if (i == rank)
+      pointers[i] = reinterpret_cast<int64_t>(t.data_ptr());
+    else {
+      void* ipc_ptr = nullptr;
+      AT_CUDA_CHECK(cudaIpcOpenMemHandle(
+        (void**)&ipc_ptr, *((const cudaIpcMemHandle_t*)handles[i].data_ptr()),
+        cudaIpcMemLazyEnablePeerAccess));
+      pointers[i] = reinterpret_cast<int64_t>(ipc_ptr);
+    }
+  }
+  return {t, pointers.to(torch::kCUDA)};
+}
+
+
 template<class FN>
-void perform(FN func, int num_runs = 1000) {
+static void perform(FN func, int num_runs = 1000) {
   for (int _ = 0; _ < 5; ++_)
     func();
   auto stream = at::cuda::getCurrentCUDAStream().stream();
@@ -937,7 +1017,7 @@ void perform(FN func, int num_runs = 1000) {
   printf("Perform: %g\n", ab::convertToElapsedTime(h1, h2) / num_runs);
 }
 
-void show(const std::vector<torch::Tensor> &xs, int64_t rank = -1) {
+static void master_print(const std::vector<torch::Tensor> &xs, int64_t rank = -1) {
   if (get_world_rank() != 0 && rank != 0)
     return;
   puts("=======================");
@@ -956,6 +1036,7 @@ void show(const std::vector<torch::Tensor> &xs, int64_t rank = -1) {
     puts("");
   }
 }
+
 
 std::tuple<torch::Tensor, torch::Tensor> warp_to_float8_block(torch::Tensor w) {
   CHECK_CUDA(w);
@@ -1049,19 +1130,22 @@ torch::Tensor warp_to_bfloat16(const torch::Tensor &w, const torch::Tensor &scal
   return w_;
 }
 
-torch::Tensor warp_gemm_nt_bf16xfp8_block_scal_out(const torch::Tensor &x, const torch::Tensor &w, const torch::Tensor &scal, const torch::Tensor &out) {
+torch::Tensor warp_gemm_nt_bf16xfp8_block_scal_out(const torch::Tensor &x, torch::Tensor w, const torch::Tensor &scal, const ::std::optional<torch::Tensor> &w_alt, const ::std::optional<torch::Tensor> &p_out) {
   CHECK_CUDA(x);
   CHECK_EQ(x.dim(), 3);
   CHECK_EQ(x.dtype(), torch::kBFloat16);
   CHECK_EQ(w.dim(), 2);
-  CHECK_EQ(out.dtype(), torch::kBFloat16);
-  CHECK_EQ(out.numel(), x.size(0) * x.size(1) * w.size(0));
 
   int samples = x.size(0) * x.size(1);
+  if (samples > 1 and w_alt.has_value())
+    w = w_alt.value();
+
+  auto out = p_out.has_value() ? p_out.value().view({samples, w.size(0)}) : torch::empty({samples, w.size(0)}, torch::TensorOptions().dtype(x.dtype()).device(x.device()));
+
+  CHECK_EQ(out.dtype(), torch::kBFloat16);
 
   if (w.dtype() == torch::kBFloat16) {
-    auto dest = out.view({samples, -1});
-    torch::matmul_out(dest, x.view({samples, -1}), w.t());
+    torch::matmul_out(out, x.view({samples, -1}), w.t());
   } else {
     CHECK_EQ(scal.dim(), 2);
 #if IS_NVIDIA_GPU
@@ -1176,11 +1260,12 @@ torch::Tensor warp_multi_head_latent_rope_bf16_v3(
   CHECK_EQ(x.size(-1), 2112);
   CHECK_EQ(cos_sin.dtype(), torch::kInt64);
   CHECK_EQ(kv_ranges.dtype(), torch::kInt32);
+  CHECK_EQ(q_b_proj.dtype(), torch::kBFloat16);
 
   int batch = qkv_act.size(0), seqlen = qkv_act.size(1);
   int samples = batch * seqlen;
 
-  auto q = antares::ops::call("rope_mla_bf16", {cos_sin, kv_a_norm, q_a_norm, x.flatten(0, 1), kv_indices, kv_cache.view({-1, 576}), kv_ranges}, {}).view({x.size(0), x.size(1), -1});
+  auto q = antares::ops::call("rope_norms_to_kvcache_bf16", {cos_sin, kv_a_norm, q_a_norm, x.flatten(0, 1), kv_indices, kv_cache.view({-1, 576}), kv_ranges}, {}).view({x.size(0), x.size(1), -1});
 
   CHECK_EQ(q_b_proj.dtype(), torch::kBFloat16);
   CHECK_EQ(q_b_proj.dim(), 2);
@@ -1205,110 +1290,41 @@ torch::Tensor warp_multi_head_latent_rope_bf16_v3(
 #endif
 #endif
 
-torch::Tensor warp_deepseek_r1_attn_bf16xf8_block_scal_v2(
-  const torch::Tensor &data,
+torch::Tensor warp_deepseek_custom_mla_bf16(
+  const torch::Tensor &x,
   const torch::Tensor &key_cache,
-  const torch::Tensor &cos_sin,
-  const torch::Tensor &qkv_a_proj,
-  const torch::Tensor &qkv_a_proj_scal,
-  const torch::Tensor &q_a_norm,
-  const torch::Tensor &kv_a_norm,
-  const torch::Tensor &q_b_proj,
-  const torch::Tensor &kv_b_proj,
-  const torch::Tensor &o_proj,
-  const torch::Tensor &o_proj_scal,
-  const torch::Tensor &range,
-  const torch::Tensor &out,
-  int64_t max_pos,
-  int64_t n_local_heads,
-  double softmax_scale
+  const torch::Tensor &kv_range,
+  const torch::Tensor &kv_indices,
+  const torch::Tensor &wvc,
+  double softmax_scale,
+  bool update_indices,
+  int64_t opt
 ) {
-  CHECK_CUDA(data);
-  CHECK_EQ(data.dim(), 3);
-  int batch = data.size(0), seqlen = data.size(1), n_heads = n_local_heads;
+  CHECK_CUDA(x);
+  CHECK_EQ(x.dim(), 4);
+  int batch = x.size(0), seqlen = x.size(1);
+  CHECK_EQ(seqlen, 1);
 
   {
-    CHECK_EQ(q_b_proj.dtype(), torch::kBFloat16);
-    CHECK_EQ(kv_b_proj.dtype(), torch::kBFloat16);
-
-    static std::unordered_map<void*, std::tuple<torch::Tensor, torch::Tensor>> wkv_b_;
-    auto it = wkv_b_.find(kv_b_proj.data_ptr());
-    if (it == wkv_b_.end()) {
-      auto _ = kv_b_proj.view({n_local_heads, 2, -1, kv_b_proj.size(-1)}).permute({1, 0, 2, 3}).contiguous(); // 2, H, 128, 512
-      wkv_b_[kv_b_proj.data_ptr()] = {_.select(0, 0).transpose(1, 2).contiguous().transpose(1, 2), _.select(0, 1)}; // H, D(128), C(512)
-      it = wkv_b_.find(kv_b_proj.data_ptr());
-    }
-    auto wkc = std::get<0>(it->second), wvc = std::get<1>(it->second);
-    auto qkv = torch::empty({batch, seqlen, 1536 + 512 + 64}, torch::TensorOptions().dtype(data.dtype()).device(data.device()));
-    warp_gemm_nt_bf16xfp8_block_scal_out(data, qkv_a_proj, qkv_a_proj_scal, qkv);
-
-    auto kv_range = range.narrow(0, 0, 2);
-    static torch::Tensor kv_indices = torch::arange(0, key_cache.numel() / key_cache.size(-1), torch::TensorOptions().dtype(torch::kInt32).device(kv_range.device()));
-    auto Q = warp_multi_head_latent_rope_bf16_v3(qkv, cos_sin, q_a_norm, kv_a_norm, q_b_proj, wkc, kv_range, kv_indices, key_cache, n_local_heads);
-
+    auto Q = x;
 #if defined(CUSTOM_MLA_DECODE)
-    if (batch == 1 && seqlen == 1) {
-      Q = mla_decode_fwd(Q, key_cache.transpose(1, 0), kv_range, softmax_scale).squeeze(0);
-      Q = antares::ops::call("logits_bf16", {Q.view(torch::kInt32), wvc.view(torch::kInt32)}, {});
-    } else
-#endif
     {
-      auto C = key_cache.narrow(0, 0, max_pos + seqlen);
-      auto S = at::einsum("bshc,tbc->bsht", {Q, C});
-      auto T = at::softmax(warp_scaled_mask_inv(S, kv_range, softmax_scale), -1);
-      Q = at::einsum("bsht,tbc->bshc", {T, C}).narrow(-1, 0, 512);
-      Q = at::einsum("bshc,hdc->bshd", {Q, wvc}); // .contiguous();
+      if (update_indices)
+        antares::ops::call("kv_range_to_indice", {kv_range.narrow(0, 0, kv_range.size(0) - 1), kv_indices}, {});
+
+      Q = mla_decode_fwd(Q, key_cache, kv_range, kv_indices, softmax_scale).view({batch * seqlen, Q.size(-2), -1});
+      if (opt == 0)
+        Q = antares::ops::call("wvc_logits_bf16", {Q.view(torch::kInt32), wvc.view(torch::kInt32)}, {});
+      else
+        Q = at::einsum("bhc,hdc->bhd", {Q, wvc}).contiguous();
     }
-    Q = warp_gemm_nt_bf16xfp8_block_scal_out(Q.view({batch, seqlen, -1}), o_proj, o_proj_scal, out);
-    return Q;
-  }
-}
-
-
-std::tuple<torch::Tensor, torch::Tensor> uncached_empty(torch::IntArrayRef shape, at::ScalarType dtype) {
-  int64_t size = std::accumulate(shape.begin(), shape.end(), 1LL, std::multiplies<int64_t>()) * torch::elementSize(dtype);
-
-  auto device_index = c10::cuda::current_device();
-  at::DeviceGuard device_guard(at::Device(at::DeviceType::CUDA, device_index));
-  void* buffer = nullptr;
-  cudaStreamCaptureMode mode = cudaStreamCaptureModeRelaxed;
-  auto stream = c10::cuda::getCurrentCUDAStream().stream();
-  AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
-
-#if defined(USE_ROCM)
-  AT_CUDA_CHECK(hipExtMallocWithFlags((void**)&buffer, size, hipDeviceMallocUncached));
 #else
-  AT_CUDA_CHECK(cudaMalloc((void**)&buffer, size));
-#endif
-  AT_CUDA_CHECK(cudaMemsetAsync(buffer, 0, size, stream));
-  AT_CUDA_CHECK(cudaStreamSynchronize(stream));
-  AT_CUDA_CHECK(cudaThreadExchangeStreamCaptureMode(&mode));
-  auto t = torch::from_blob(buffer, shape, torch::TensorOptions().dtype(dtype).device(torch::kCUDA));
-  CHECK_EQ(t.data_ptr(), buffer);
-
-  auto options = torch::TensorOptions().dtype(torch::kUInt8);
-  auto handle = torch::empty({1, static_cast<int64_t>(sizeof(cudaIpcMemHandle_t))}, options.device(torch::kCPU));
-  AT_CUDA_CHECK(cudaIpcGetMemHandle((cudaIpcMemHandle_t*)handle.data_ptr(), buffer));
-  return {t, handle};
-}
-
-std::tuple<torch::Tensor, torch::Tensor> uncached_exchange(const torch::Tensor &t, const torch::Tensor &handles, int64_t rank) {
-  CHECK_EQ(handles.dim(), 2);
-  int scope_size = handles.size(0);
-  auto pointers = torch::empty({scope_size}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
-
-  for (int i = 0; i < scope_size; ++i) {
-    if (i == rank)
-      pointers[i] = reinterpret_cast<int64_t>(t.data_ptr());
-    else {
-      void* ipc_ptr = nullptr;
-      AT_CUDA_CHECK(cudaIpcOpenMemHandle(
-        (void**)&ipc_ptr, *((const cudaIpcMemHandle_t*)handles[i].data_ptr()),
-        cudaIpcMemLazyEnablePeerAccess));
-      pointers[i] = reinterpret_cast<int64_t>(ipc_ptr);
+    {
+      AT_ASSERTM(false, "Custom MLA not implemented.");
     }
+#endif
+    return Q.view({batch, seqlen, -1});
   }
-  return {t, pointers.to(torch::kCUDA)};
 }
 
 static torch::Tensor warp_intra_add_allreduce_bf16(const torch::Tensor &x, const torch::Tensor &t,
@@ -1321,8 +1337,8 @@ static torch::Tensor warp_intra_add_allreduce_bf16(const torch::Tensor &x, const
 
   auto buf = std::get<0>(buffer).flatten();
   if (copy)
-    buf.copy_(t.flatten());
-  static torch::Tensor v_count = torch::zeros({8192 * 16}, torch::TensorOptions().dtype(torch::kInt64).device(x.device()));
+    buf.narrow(0, 0, t.numel()).copy_(t.flatten());
+  static torch::Tensor v_count = torch::zeros({1024 * 1024}, torch::TensorOptions().dtype(torch::kInt64).device(x.device()));
   int scope_size = std::get<1>(sigp).numel();
   std::vector<torch::Tensor> args = {x.flatten().view(torch::kInt32), std::get<1>(buffer), std::get<0>(sigp), std::get<1>(sigp), v_count};
   if (scope_size == 8)
@@ -1395,11 +1411,12 @@ torch::Tensor warp_glu_expert_bf16xf4_group_scal(
   CHECK_EQ(x.dim(), 3);
   int samples = x.size(0) * x.size(1), model_dim = x.size(2);
   int select_size = expert_ids.numel();
+  int num_top_k = expert_ids.size(-1);
 #if IS_NVIDIA_GPU
-  auto y = antares::ops::call("fmoe_f16xf4_phase_1", {x.view({samples, -1, 8}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat32)}, {}).view({select_size, -1});
+  auto y = antares::ops::call("fmoe_f16xf4_phase_1_top_k", {x.view({samples, -1, 8}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat32)}, {num_top_k}).view({select_size, -1});
   antares::ops::call("fmoe_f16xf4_phase_2", {y.view({samples, expert_ids.size(1), 2, -1, 8}).view(torch::kInt32), down_s, down_m, expert_ids, expert_weight, down_w.view(torch::kFloat32), out}, {}, false, 0, 6);
 #else
-  auto y = antares::ops::call("fmoe_f16xf4_phase_1", {x.view({samples, -1, 16}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat64)}, {}).view({select_size, -1});
+  auto y = antares::ops::call("fmoe_f16xf4_phase_1_top_k", {x.view({samples, -1, 16}).view(torch::kInt32), gateup_s, gateup_m, expert_ids.view({select_size}), gateup_w.view(torch::kFloat64)}, {num_top_k}).view({select_size, -1});
   antares::ops::call("fmoe_f16xf4_phase_2", {y.view({samples, expert_ids.size(1), 2, -1, 16}).view(torch::kInt32), down_s, down_m, expert_ids, expert_weight, down_w.view(torch::kFloat64), out}, {}, false, 0, 6);
 #endif
   return out.view(x.sizes());
@@ -1631,8 +1648,8 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("sparse_bmm_infer", warp_sparse_bmm_infer);
 
 #if defined(USE_NCCL)
-  m.def("uncached_empty", uncached_empty);
-  m.def("uncached_exchange", uncached_exchange);
+  m.def("uncached_empty_ex", uncached_empty_ex);
+  m.def("all_gather_native", all_gather_native);
 
   m.def("nccl_bcast", warp_nccl_bcast);
   m.def("nccl_all_reduce", &warp_nccl_all_reduce);
@@ -1641,7 +1658,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("gate_gemm_out_bf16", warp_gate_gemm_out_bf16);
   m.def("intra_add_allreduce_bf16", warp_intra_add_allreduce_bf16);
   m.def("gemm_nt_bf16xfp8_block_scal_out", warp_gemm_nt_bf16xfp8_block_scal_out);
-  m.def("deepseek_r1_attn_bf16xf8_block_scal_v2", warp_deepseek_r1_attn_bf16xf8_block_scal_v2);
+  m.def("deepseek_custom_mla_bf16", warp_deepseek_custom_mla_bf16);
   m.def("multi_head_latent_rope_bf16_v3", warp_multi_head_latent_rope_bf16_v3);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_bf16xf8_block_scal);
   m.def("glu_expert_bf16xf4_group_scal", warp_glu_expert_bf16xf4_group_scal);

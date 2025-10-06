@@ -122,8 +122,11 @@ struct __attribute__((packed)) Kernel2Args
     unsigned int s0, s1, s2, s3, s4;
 };
 
-static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr, double softmax_scale) {
-    Q = Q.squeeze(1);
+static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr, torch::Tensor kv_indices, double softmax_scale) {
+    if (Q.dim() == 4)
+      Q = Q.flatten(0, 1);
+    int batch = Q.size(0);
+
     KV = KV.view({-1, 1, 1, KV.size(-1)});
     static const int splits = 32;
 
@@ -139,15 +142,15 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
       impl_comb = &impl_a16w16_bf16;
     }
 
-    static torch::Tensor kv_page_indices, kv_last_page_lens, splitData, splitLse, output;
-    if (splitData.numel() == 0) {
+    static torch::Tensor kv_last_page_lens;
+    if (kv_last_page_lens.numel() == 0) {
       int stride = KV.size(0);
-      kv_page_indices = torch::arange(0, stride + 1, torch::TensorOptions().dtype(torch::kInt32).device(Q.device()));
-      kv_last_page_lens = torch::ones({1}, torch::TensorOptions().dtype(torch::kInt32).device(Q.device()));
-      splitData = torch::empty({1, splits, Q.size(1), 512}, torch::TensorOptions().dtype(torch::kFloat32).device(Q.device()));
-      splitLse = torch::empty({1, splits, Q.size(1), 1}, torch::TensorOptions().dtype(torch::kFloat32).device(Q.device()));
-      output = torch::empty({1, Q.size(1), 512}, torch::TensorOptions().dtype(Q.dtype()).device(Q.device()));
+      kv_last_page_lens = torch::ones({65536}, torch::TensorOptions().dtype(torch::kInt32).device(Q.device()));
     }
+
+    auto splitData = torch::empty({batch, splits, Q.size(1), 512}, torch::TensorOptions().dtype(torch::kFloat32).device(Q.device()));
+    auto splitLse = torch::empty({batch, splits, Q.size(1), 1}, torch::TensorOptions().dtype(torch::kFloat32).device(Q.device()));
+    auto output = torch::empty({batch, Q.size(1), 512}, torch::TensorOptions().dtype(Q.dtype()).device(Q.device()));
 
     int num_seqs = Q.size(0);
     int num_heads = Q.size(1);
@@ -168,7 +171,7 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
     args.ptr_Q = Q.data_ptr();
     args.ptr_KV = KV.data_ptr();
     args.ptr_LTP = kv_indptr.data_ptr();
-    args.ptr_LTD = kv_page_indices.data_ptr();
+    args.ptr_LTD = kv_indices.data_ptr();
     args.ptr_LTL = kv_last_page_lens.data_ptr();
     args.scalar = (float)softmax_scale;
     args.s_MQA = gqa_ratio;
