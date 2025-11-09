@@ -8,9 +8,45 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
 > [!TIP]
-> #### News: Add compatiblity with DeepSeek-3.2-Exp inference in dense format since *image-20251006*
+> #### News: Integrate Tutel LLM module into VibeVoice for accelerated audio generation.
+> ```sh
+>
+> # Step-1: Download 1.5B or 7B models
+> pip3 install -U "huggingface_hub[cli]" --upgrade
+>
+> hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
+> hf download aoi-ot/VibeVoice-1.5B --local-dir aoi-ot/VibeVoice-1.5B
+>
+> hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
+> hf download aoi-ot/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
+>
+> # Step-2: Launch service for single A100:
+> docker run -e LOCAL_SIZE=1 -e WORKER=2 -it --rm --ipc=host --net=host --shm-size=8g \
+>       -e VOICES="https://homepages.inf.ed.ac.uk/htang2/notes/speech-samples/103-1240-0000.wav" \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
+>       tutelgroup/deepseek-671b:a100x8-chat-20251111 --listen_port 8001 \
+>         --try_path ./aoi-ot/VibeVoice-1.5B \
+>         --try_path ./aoi-ot/VibeVoice-Large
+>
+> # Step-2: Launch service for single MI300:
+> docker run -e LOCAL_SIZE=1 -e WORKER=2 -it --rm --ipc=host --net=host --shm-size=8g \
+>       -e VOICES="https://homepages.inf.ed.ac.uk/htang2/notes/speech-samples/103-1240-0000.wav" \
+>       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20251111 --listen_port 8001 \
+>         --try_path ./aoi-ot/VibeVoice-1.5B \
+>         --try_path ./aoi-ot/VibeVoice-Large
+>
+> # Step-3: Test audio generation:
+> curl -X POST http://0.0.0.0:8001/chat -d '{"text": "VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, such as podcasts, from text."}' > sound_output.mp3
+>
+> # Step-4: mpv ./sound_output.mp3
+> ```
+
+> [!TIP]
+> #### Steps for Fast Inference of Language Models
 > 
-> *Steps for "Model Downloading" => "NVIDIA/AMD GPU Serving" => "Browser Login to listen_port":*
 > ```sh
 > 
 > # Step-1: Select one model for downloading, e.g.:
@@ -77,6 +113,10 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### Inference Models: DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/.. (output tps/bsz = 1):
 > |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
+> | $aoi-ot/VibeVoice-1.5B (A100 \times 1)$ | bf16 | - | rtf=0.07 |
+> | $aoi-ot/VibeVoice-Large (A100 \times 1)$ | bf16 | - | rtf=0.17 |
+> | $aoi-ot/VibeVoice-1.5B (MI300 \times 1)$ | bf16 | - | rtf=0.06 |
+> | $aoi-ot/VibeVoice-Large (MI300 \times 1)$ | bf16 | - | rtf=0.11 |
 > | $openai/gpt-oss-20b\ (20B,\ MI300 \times 1)$ | mxfp4 | 193 | 412 |
 > | $openai/gpt-oss-20b\ (20B,\ A100 \times 1)$ | mxfp4 | 160 | 241 |
 > | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | N/A | 284 |
@@ -103,6 +143,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20251111*: Integrate Tutel LLM module into VibeVoice for accelerated inference (rtf = 0.07 for single A100).
+>
 > Image-*20251006*: Resolve compatibility with DeepSeek-V3.2-Exp
 >
 > Image-*20250827*: Add distributed support for OpenAI GPT-OSS 20B/120B with MXFP4 inference
