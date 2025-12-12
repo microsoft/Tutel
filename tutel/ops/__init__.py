@@ -245,6 +245,57 @@ def marlin_nvfp4_process_global_scale(global_scale):
     exponent_bias = 2 ** (target_exponent - 1) - 2 ** (fp4_exponent - 1)
     return global_scale * (2.0 ** (exponent_bias - 7))
 
+def unpack_marlin(marlin_weight):
+    # reverse process of `tutel/ops/__init__.py#L141-L162`, L140 excluded
+    def _get_marlin_perms(device):
+        perm = []
+        for i in range(32):
+            perm1 = []
+            col = i // 4
+            for block in [0, 1]:
+                for row in [
+                    2 * (i % 4),
+                    2 * (i % 4) + 1,
+                    2 * (i % 4 + 4),
+                    2 * (i % 4 + 4) + 1
+                ]:
+                    perm1.append(16 * row + col + 8 * block)
+            for j in range(4):
+                perm.extend([p + 256 * j for p in perm1])
+        perm = np.array(perm)
+        interleave = np.array([0, 2, 4, 6, 1, 3, 5, 7])
+        perm = perm.reshape((-1, 8))[:, interleave].ravel()
+        return torch.from_numpy(perm).long().to(device)
+    
+    device = marlin_weight.device
+    E, K_div_16, out_cols = marlin_weight.shape
+    
+    # pack_marlin : out_cols = N * 16 // 8 = N * 2
+    N = out_cols // 2
+    K = K_div_16 * 16
+    tile = 16
+    
+    # shape: [E, K//16, N*2] -> [E, K//16, N*2, 8]
+    unpacked_bits = torch.zeros((E, K_div_16, out_cols, 8), dtype=torch.int32, device=device)
+    
+    for i in range(8):
+        # marlin_weight: [E, K//16, out_cols]
+        # unpacked_bits[..., i]: [E, K//16, out_cols]
+        unpacked_bits[..., i] = (marlin_weight >> (4 * i)) & 0xF
+        
+    w = unpacked_bits.view(E, K_div_16, -1)
+    
+    perm = _get_marlin_perms(device)
+    inv_perm = torch.argsort(perm)
+    w_flat = w.reshape(-1, perm.numel())
+    w_unpermuted = w_flat[:, inv_perm]
+    w = w_unpermuted.reshape(E, K_div_16, N * tile)
+    w = w.reshape(E, K // tile, N // tile, tile, tile)
+    w = w.permute(0, 1, 3, 2, 4)
+    
+    w_unpacked = w.reshape(E, K, N)
+    
+    return w_unpacked
 
 def __getattr__(name):
   fn = getattr(torch.ops.tutel_ops, name)
