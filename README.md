@@ -55,7 +55,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > hf download deepseek-ai/DeepSeek-V3.2-Exp --local-dir deepseek-ai/DeepSeek-V3.2-Exp
 > hf download openai/gpt-oss-120b --local-dir openai/gpt-oss-120b
 > hf download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
-> hf download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
+> hf download moonshotai/Kimi-K2-Instruct-0905 --local-dir moonshotai/Kimi-K2-Instruct-0905
 > hf download NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4
 > hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir Qwen/Qwen3-30B-A3B-FP8
 >
@@ -72,7 +72,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
 >         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
 >         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --try_path ./moonshotai/Kimi-K2-Instruct-0905 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
@@ -92,7 +92,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
 >         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
 >         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --try_path ./moonshotai/Kimi-K2-Instruct-0905 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \

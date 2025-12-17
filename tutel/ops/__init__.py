@@ -89,6 +89,24 @@ def from_float4_groupwise(w, scale, scale_2, input_scale=None):
   w = fp4_e2m1_table.index_select(0, w.flatten()).view(*scale.shape, -1) * scale.bfloat16().unsqueeze(scale.dim())
   return w.flatten(-2) * scale_2
 
+def from_int4_groupwise(x, s, dtype=torch.bfloat16):
+  assert x.dim() == 2
+  assert s.size(-1) * 4 == x.size(-1)
+  x = x.view(torch.uint8).view(x.size(0), -1)
+  N, half_M = x.shape
+
+  x16 = x.to(torch.int16)
+  low = x16 & 0x0F
+  high = (x16 >> 4) & 0x0F
+  low_signed = torch.where(low >= 8, low - 16, low).to(torch.int8)
+  high_signed = torch.where(high >= 8, high - 16, high).to(torch.int8)
+  out = torch.empty((N, half_M * 2), dtype=torch.int8, device=x.device)
+  out[:, 0::2] = low_signed
+  out[:, 1::2] = high_signed
+  out = out.to(dtype)
+  return (out.view(*s.shape, -1).to(dtype) * s.unsqueeze(-1).to(dtype)).flatten(-2)
+
+
 def from_mxfp4(p):
   w = p.to(torch.int16)
   fp4_e2m1_table = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.float32, device=w.device)
