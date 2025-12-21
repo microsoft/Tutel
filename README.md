@@ -7,42 +7,20 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported CPU: fp64/fp32
 - Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
-> [!TIP]
-> #### News: Integrate Tutel LLM module into VibeVoice for accelerated audio generation.
-> ```sh
->
-> # Step-1: Download 1.5B or 7B models
-> pip3 install -U "huggingface_hub[cli]" --upgrade
->
-> hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
-> hf download aoi-ot/VibeVoice-1.5B --local-dir aoi-ot/VibeVoice-1.5B
->
-> hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
-> hf download aoi-ot/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
->
-> # Step-2: Launch service for single A100:
-> docker run -e LOCAL_SIZE=1 -e WORKER=2 -it --rm --ipc=host --net=host --shm-size=8g \
->       -e VOICES="https://homepages.inf.ed.ac.uk/htang2/notes/speech-samples/103-1240-0000.wav" \
->       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20251111 --listen_port 8001 \
->         --try_path ./aoi-ot/VibeVoice-1.5B \
->         --try_path ./aoi-ot/VibeVoice-Large
->
-> # Step-2: Launch service for single MI300:
-> docker run -e LOCAL_SIZE=1 -e WORKER=2 -it --rm --ipc=host --net=host --shm-size=8g \
->       -e VOICES="https://homepages.inf.ed.ac.uk/htang2/notes/speech-samples/103-1240-0000.wav" \
->       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       tutelgroup/deepseek-671b:mi300x8-chat-20251111 --listen_port 8001 \
->         --try_path ./aoi-ot/VibeVoice-1.5B \
->         --try_path ./aoi-ot/VibeVoice-Large
->
-> # Step-3: Test audio generation:
-> curl -X POST http://0.0.0.0:8001/chat -d '{"text": "VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, such as podcasts, from text."}' > sound_output.mp3
->
-> # Step-4: mpv ./sound_output.mp3
-> ```
+#### Latest (20251222) Inference Latencies for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/.. (output TPS per user):
+> |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
+> |  ----  | ----  | ----  | ----  |
+> | $nvidia/DeepSeek-R1-FP4\ (671B,\ A100 \times 8)$ | nvfp4 | - | 102 |
+> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 8)$ | nvfp4 | - | 151 |
+> | $moonshotai/Kimi-K2-Instruct\ (1T,\ A100 \times 8)$ | nvfp4 | - | 104 |
+> | $moonshotai/Kimi-K2-Instruct\ (1T,\ MI300 \times 8)$ | fp8b128 | 49 | 153 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(A100\times8)$ | nvfp4 | - | 114 |
+> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times8)$ | nvfp4 | - | 122 |
+> | $openai/gpt-oss-120b\ (120B,\ A100 \times 1)$ | mxfp4 | 127 | 212 |
+> | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | 191 | 311 |
+> | $aoi-ot/VibeVoice-1.5B (A100 \times 1)$ | bf16 | - | rtf=0.07 |
+> | $aoi-ot/VibeVoice-1.5B (MI300 \times 1)$ | bf16 | - | rtf=0.06 |
+> 
 
 > [!TIP]
 > #### Steps for Fast Inference of Language Models
@@ -52,97 +30,74 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > # Step-1: Select one model for downloading, e.g.:
 > pip3 install -U "huggingface_hub[cli]" --upgrade
 >
-> hf download deepseek-ai/DeepSeek-V3.2-Exp --local-dir deepseek-ai/DeepSeek-V3.2-Exp
+> hf download deepseek-ai/DeepSeek-V3.2 --local-dir deepseek-ai/DeepSeek-V3.2
 > hf download openai/gpt-oss-120b --local-dir openai/gpt-oss-120b
 > hf download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
 > hf download moonshotai/Kimi-K2-Instruct-0905 --local-dir moonshotai/Kimi-K2-Instruct-0905
 > hf download NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4
 > hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir Qwen/Qwen3-30B-A3B-FP8
 >
+> hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
+> hf download aoi-ot/VibeVoice-1.5B --local-dir aoi-ot/VibeVoice-1.5B
+>
+> hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
+> hf download aoi-ot/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
+>
 > # Step-2 for NVIDIA GPUs: A100/A800/H100/H800/H20/H200 (80G x 8):
 > docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20251006 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:a100x8-chat-20251222 --serve=webui --listen_port 8000 \
 >         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
 >         --try_path ./openai/gpt-oss-20b \
 >         --try_path ./openai/gpt-oss-120b \
->         --try_path ./deepseek-ai/DeepSeek-V3.2-Exp \
->         --try_path ./deepseek-ai/DeepSeek-R1 \
+>         --try_path ./deepseek-ai/DeepSeek-V3.2 \
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
 >         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
 >         --try_path ./moonshotai/Kimi-K2-Instruct-0905 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
 >         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
->         --try_path ./Qwen/Qwen3-30B-A3B-FP8
+>         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
+>         --try_path ./aoi-ot/VibeVoice-1.5B \
+>         --try_path ./aoi-ot/VibeVoice-Large
 >
 > # Step-2 for AMD GPUs: MI300x NVFP4/FP8 (192G x 8):
 > docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) \
->       tutelgroup/deepseek-671b:mi300x8-chat-20251006 --serve=webui --listen_port 8000 \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20251222 --serve=webui --listen_port 8000 \
 >         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
 >         --try_path ./openai/gpt-oss-20b \
 >         --try_path ./openai/gpt-oss-120b \
->         --try_path ./deepseek-ai/DeepSeek-V3.2-Exp \
->         --try_path ./deepseek-ai/DeepSeek-R1 \
+>         --try_path ./deepseek-ai/DeepSeek-V3.2 \
 >         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./deepseek-ai/DeepSeek-V3-0324 \
 >         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
 >         --try_path ./moonshotai/Kimi-K2-Instruct-0905 \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
 >         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
 >         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
->         --try_path ./Qwen/Qwen3-30B-A3B-FP8
+>         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
+>         --try_path ./aoi-ot/VibeVoice-1.5B \
+>         --try_path ./aoi-ot/VibeVoice-Large
 >
 > # Step-3: Choose one of methods for prompt requests:
->     # Open UI using web browsers (Edge/Chromium/Firefox/..)
->     x-www-browser http://0.0.0.0:8000/
->
->     # Direct response to stdout:
+>     # For LLM models, open UI using web browsers (Edge/Chromium/Firefox/..)
+>     #   or using REST/OpenAI API for direct response to stdout (curl):
+>     chromium-browser http://0.0.0.0:8000/
 >     curl -X POST http://0.0.0.0:8000/chat -d '{"text": "Given x + 1/x = 1, calculate x^2016 + 1/(x^2016)."}'
->
->     # Using OpenAI client interface:
 >     python3 -m tutel.examples.oai_request --url '0.0.0.0:8000' --prompt 'Hello.'
+>
+>     # For VibeVoice multimodality models, using REST API to generate audio:
+>     curl -X POST http://0.0.0.0:8000/chat -d '{"text": "VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, such as podcasts, from text."}' > sound_output.mp3
 > ```
-
-#### Inference Models: DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/.. (output tps/bsz = 1):
-> |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
-> |  ----  | ----  | ----  | ----  |
-> | $aoi-ot/VibeVoice-1.5B (A100 \times 1)$ | bf16 | - | rtf=0.07 |
-> | $aoi-ot/VibeVoice-Large (A100 \times 1)$ | bf16 | - | rtf=0.17 |
-> | $aoi-ot/VibeVoice-1.5B (MI300 \times 1)$ | bf16 | - | rtf=0.06 |
-> | $aoi-ot/VibeVoice-Large (MI300 \times 1)$ | bf16 | - | rtf=0.11 |
-> | $openai/gpt-oss-20b\ (20B,\ MI300 \times 1)$ | mxfp4 | 193 | 412 |
-> | $openai/gpt-oss-20b\ (20B,\ A100 \times 1)$ | mxfp4 | 160 | 241 |
-> | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | N/A | 284 |
-> | $openai/gpt-oss-120b\ (120B,\ A100 \times 1)$ | mxfp4 | 108 | 167 |
-> | $openai/gpt-oss-120b\ (120B,\ A100 \times 2)$ | mxfp4 | 147 | 218 |
-> | $openai/gpt-oss-120b\ (120B,\ A100 \times 4)$ | mxfp4 | 184 | 273 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ A100 \times 8)$ | nvfp4 | N/A | 92 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ H100 \times 8)$ | nvfp4 | N/A | 134 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 8)$ | nvfp4 | N/A | 151 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 4)$ | nvfp4 | N/A | 116 |
-> | $deepseek-ai/DeepSeek-V3-0324\ (671B,\ MI300 \times 8)$ | fp8b128 | 48 | 145 |
-> | $moonshotai/Kimi-K2-Instruct\ (1T,\ MI300 \times 8)$ | fp8b128 | 49 | 153 |
-> | $moonshotai/Kimi-K2-Instruct\ (1T,\ A100 \times 8)$ | nvfp4 | N/A | 93 |
-> | $Qwen/Qwen3MoE-235B-FP8\ (MI300 \times 4)$ | fp8b128 | 41 |99 |
-> | $Qwen/Qwen3-30B-A3B-FP8\ (A100 \times 1)$ | fp8b128 | N/A | 161 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(A100\times8)$ | nvfp4 | N/A | 96 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(A100\times4)$ | nvfp4 | N/A | 79 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times8)$ | nvfp4 | N/A | 122 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times4)$ | nvfp4 | N/A | 101 |
-> | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times1)$ | nvfp4 | N/A | 56 |
-> | $Qwen/Qwen3-0.6B\ (MI300 \times 1)$ | bf16 | 667 | 798 |
-> 
-
 
 ## What's New:
 
+> Image-*20251222*: Fine-tune A100 performance for most models.
+>
 > Image-*20251111*: Integrate Tutel LLM module into VibeVoice for accelerated inference (rtf = 0.07 for single A100).
 >
 > Image-*20251006*: Resolve compatibility with DeepSeek-V3.2-Exp

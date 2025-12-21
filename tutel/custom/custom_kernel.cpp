@@ -1149,7 +1149,10 @@ torch::Tensor warp_gemm_nt_bf16xfp8_block_scal_out(const torch::Tensor &x, torch
   } else {
     CHECK_EQ(scal.dim(), 2);
 #if IS_NVIDIA_GPU
-    antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(-1)}).view(torch::kInt64), w.view(torch::kInt32), scal, out}, {}, false, 0, 3);
+    if (w.dtype() == torch::kInt8)
+      antares::ops::call("gemv_nt_bf16xfp8_block_v3", {x.view({samples, x.size(-1)}).view(torch::kComplexDouble), w.view(torch::kInt64), scal, out}, {}, false, 0, 3);
+    else
+      antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(-1)}).view(torch::kInt64), w.view(torch::kInt32), scal, out}, {}, false, 0, 3);
 #else
     antares::ops::call("gemv_nt_bf16xfp8_block_v2", {x.view({samples, x.size(-1)}).view(torch::kInt32), w.view(at::kComplexDouble), scal, out}, {}, false, 0, 3);
 #endif

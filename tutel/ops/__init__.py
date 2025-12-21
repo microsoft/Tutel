@@ -81,13 +81,13 @@ def to_float4_groupwise(w):
   scale_b = (scale_b / scale_o).to(torch.float8_e4m3fn).view(*w.shape[:-1], w.shape[-1] // 16)
   return (fp4_vals[0] + (fp4_vals[1] << 4)).squeeze(-1), scale_b, scale_o
 
-def from_float4_groupwise(w, scale, scale_2, input_scale=None):
+def from_float4_groupwise(w, scale, scale_o=None, input_scale=None):
   assert w.dtype == torch.uint8
-  w = w.to(torch.int16)
   fp4_e2m1_table = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.bfloat16, device=w.device)
+  w = w.to(torch.int16)
   w = ((w & 15) + ((w >> 4) << 8)).view(torch.int8).to(torch.int32)
-  w = fp4_e2m1_table.index_select(0, w.flatten()).view(*scale.shape, -1) * scale.bfloat16().unsqueeze(scale.dim())
-  return w.flatten(-2) * scale_2
+  w = (fp4_e2m1_table.index_select(0, w.flatten()).view(*scale.shape, -1) * scale.bfloat16().unsqueeze(scale.dim())).flatten(-2)
+  return w * scale_o if scale_o is not None else w
 
 def from_int4_groupwise(x, s, dtype=torch.bfloat16):
   assert x.dim() == 2
@@ -192,13 +192,6 @@ def marlin_permute_scales(s, group_size):
         return scale_perm, scale_perm_single
 
     def nvfp4_marlin_process_scales(marlin_scales):
-        if not (marlin_scales >= 0).all():
-            logger.warning_once(
-                "NVFP4 Marlin assumes the scales to be >=0, but has encountered "
-                "negative scales. Accuracy will likely be degraded. This is "
-                "because it changes the scales from FP8-S1E4M3 to a special "
-                "FP8-S0E5M3 format to speedup the dequantization."
-            )
         # convert to half first, we would convert to fp8 later
         marlin_scales = marlin_scales.to(torch.half)
 
