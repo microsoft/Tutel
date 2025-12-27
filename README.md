@@ -10,16 +10,16 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 #### Latest (20251222) Inference Latencies for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/.. (output TPS per user):
 > |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ A100 \times 8)$ | nvfp4 | - | 102 |
-> | $nvidia/DeepSeek-R1-FP4\ (671B,\ MI300 \times 8)$ | nvfp4 | - | 151 |
+> | $deepseek-ai/DeepSeek-V3.2\ (671B,\ A100 \times 8)$ | nvfp4 | - | 102 |
+> | $deepseek-ai/DeepSeek-V3.2\ (671B,\ MI300 \times 8)$ | nvfp4 | - | 151 |
 > | $moonshotai/Kimi-K2-Instruct\ (1T,\ A100 \times 8)$ | nvfp4 | - | 104 |
 > | $moonshotai/Kimi-K2-Instruct\ (1T,\ MI300 \times 8)$ | fp8b128 | 49 | 153 |
 > | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(A100\times8)$ | nvfp4 | - | 114 |
 > | $NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4(MI300\times8)$ | nvfp4 | - | 122 |
 > | $openai/gpt-oss-120b\ (120B,\ A100 \times 1)$ | mxfp4 | 127 | 212 |
 > | $openai/gpt-oss-120b\ (120B,\ MI300 \times 1)$ | mxfp4 | 191 | 311 |
-> | $aoi-ot/VibeVoice-1.5B (A100 \times 1)$ | bf16 | - | rtf=0.07 |
-> | $aoi-ot/VibeVoice-1.5B (MI300 \times 1)$ | bf16 | - | rtf=0.06 |
+> | $microsoft/VibeVoice-1.5B (A100 \times 1)$ | bf16 | - | rtf=0.07 |
+> | $microsoft/VibeVoice-1.5B (MI300 \times 1)$ | bf16 | - | rtf=0.06 |
 > 
 
 > [!TIP]
@@ -31,11 +31,11 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > pip3 install -U "huggingface_hub[cli]" --upgrade
 >
 > hf download deepseek-ai/DeepSeek-V3.2 --local-dir deepseek-ai/DeepSeek-V3.2
-> hf download openai/gpt-oss-120b --local-dir openai/gpt-oss-120b
 > hf download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
-> hf download moonshotai/Kimi-K2-Instruct-0905 --local-dir moonshotai/Kimi-K2-Instruct-0905
+> hf download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
+> hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
 > hf download NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4
-> hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir Qwen/Qwen3-30B-A3B-FP8
+> hf download openai/gpt-oss-120b --local-dir openai/gpt-oss-120b
 >
 > hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
 > hf download aoi-ot/VibeVoice-1.5B --local-dir aoi-ot/VibeVoice-1.5B
@@ -49,17 +49,13 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20251222 --serve=webui --listen_port 8000 \
 >         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
->         --try_path ./openai/gpt-oss-20b \
->         --try_path ./openai/gpt-oss-120b \
->         --try_path ./deepseek-ai/DeepSeek-V3.2 \
->         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->         --try_path ./moonshotai/Kimi-K2-Instruct-0905 \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
+>         --try_path ./deepseek-ai/DeepSeek-V3.2 \
 >         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
->         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
 >         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
+>         --try_path ./openai/gpt-oss-120b \
 >         --try_path ./aoi-ot/VibeVoice-1.5B \
 >         --try_path ./aoi-ot/VibeVoice-Large
 >
@@ -69,19 +65,16 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20251222 --serve=webui --listen_port 8000 \
 >         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
->         --try_path ./openai/gpt-oss-20b \
->         --try_path ./openai/gpt-oss-120b \
->         --try_path ./deepseek-ai/DeepSeek-V3.2 \
->         --try_path ./deepseek-ai/DeepSeek-R1-0528 \
->         --try_path ./deepseek-ai/DeepSeek-Prover-V2-671B \
->         --try_path ./moonshotai/Kimi-K2-Instruct-0905 \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
 >         --try_path ./nvidia/DeepSeek-R1-FP4 \
+>         --try_path ./deepseek-ai/DeepSeek-V3.2 \
 >         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
 >         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
->         --try_path ./Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 \
 >         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
+>         --try_path ./openai/gpt-oss-120b \
 >         --try_path ./aoi-ot/VibeVoice-1.5B \
 >         --try_path ./aoi-ot/VibeVoice-Large
+>
 >
 > # Step-3: Choose one of methods for prompt requests:
 >     # For LLM models, open UI using web browsers (Edge/Chromium/Firefox/..)
