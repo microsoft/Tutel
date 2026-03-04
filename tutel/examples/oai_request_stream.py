@@ -18,11 +18,14 @@ client = openai.OpenAI(base_url=f'http://{args.url}/v1', api_key=args.api_key)
 response = client.chat.completions.create(
   model=args.model,
   messages=[{"role": "user", "content": args.prompt}], max_completion_tokens=4096,
-  stream=False,
+  stream=True,
 )
 
 print('[Prompt]', args.prompt)
 print()
 print('[Response]')
-print(response.choices[0].message.content)
+for chunk in response:
+    content = chunk.choices[0].delta.content
+    if content:
+        print(content, end="", flush=True)
 print()
