@@ -7,7 +7,83 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported CPU: fp64/fp32
 - Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
-#### Latest (20251222) Inference Latencies for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/.. (output TPS per user):
+<div align="center"><img src="doc/DeepSeek-V3.2.png" width="600px" alt="DeepSeek-V3.2"></div>
+<div align="center">Scaling DeepSeek V3.1/3.2 TPOS with Context Size</div>
+
+> [!TIP]
+> #### Steps for DeepSeek V3.2 (Long-Context Mode):
+> 
+> ```sh
+> [Model Downloads]
+>   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
+>   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
+>   hf download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
+> 
+> [DeepSeek V3.2 Long-Context (A100/H100/B200 only)]
+>   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260306 --serve=webui --listen_port 8000 \
+>         --try_path ./nvidia/DeepSeek-V3.2-NVFP4 \
+>         --try_path ./nvidia/Kimi-K2-Thinking-NVFP4 \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --max_seq_len 300000  # up to 1,000,000 for H200x8
+> 
+> [DeepSeek V3.2 Long-Context (MI300 only)]
+>   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260306 --serve=webui --listen_port 8000 \
+>         --try_path ./nvidia/DeepSeek-V3.2-NVFP4 \
+>         --try_path ./nvidia/Kimi-K2-Thinking-NVFP4 \
+>         --try_path ./moonshotai/Kimi-K2-Instruct \
+>         --max_seq_len 1000000
+> 
+> [OpenAI/Ollama/Direct Request]
+>   curl -N -X POST http://0.0.0.0:8000/chat -d '{"text": "Write a Python code of the Quicksort algorithm."}'
+>   python3 -m tutel.examples.oai_request_stream --url '0.0.0.0:8000' --prompt 'Write a Python code of the Quicksort algorithm.'
+> 
+> [Open-WebUI URL for Web browsers]
+>   xdg-open http://0.0.0.0:8000
+> ```
+
+> [!TIP]
+> #### Steps for Microsoft VibeVoice (Multimodality Mode):
+> 
+> ```sh
+> [Model Downloads]
+>   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download microsoft/VibeVoice-1.5B --local-dir microsoft/VibeVoice-1.5B
+>   hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
+>
+>   hf download microsoft/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
+>   hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
+> 
+> [Microsoft VibeVoice (A100/H100/B200 only)]
+> docker run -e LOCAL_SIZE=1 -it --rm -p 8001:8000 --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
+>       -e VOICES="https://homepages.inf.ed.ac.uk/htang2/notes/speech-samples/103-1240-0000.wav" \
+>       tutelgroup/deepseek-671b:a100x8-chat-20251222 --serve=core \
+>         --try_path ./microsoft/VibeVoice-1.5B \
+>         --try_path ./microsoft/VibeVoice-Large
+> 
+> [Microsoft VibeVoice (MI300 only)]
+> docker run -e LOCAL_SIZE=1 -it --rm -p 8001:8000 --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       -e VOICES="https://homepages.inf.ed.ac.uk/htang2/notes/speech-samples/103-1240-0000.wav" \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20251222 --serve=core \
+>         --try_path ./microsoft/VibeVoice-1.5B \
+>         --try_path ./microsoft/VibeVoice-Large
+> 
+> [Audio Generation Request]
+>   curl -X POST http://0.0.0.0:8001/chat -d '{"text": "VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, such as podcasts, from text."}' > sound_output.mp3
+> ```
+
+
+#### Inference TPOS for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/..:
 > |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
 > |  ----  | ----  | ----  | ----  |
 > | $deepseek-ai/DeepSeek-V3.2\ (671B,\ A100 \times 8)$ | nvfp4 | - | 102 |
@@ -22,73 +98,10 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > | $microsoft/VibeVoice-1.5B (MI300 \times 1)$ | bf16 | - | rtf=0.06 |
 > 
 
-> [!TIP]
-> #### Steps for Fast Inference of Language Models
-> 
-> ```sh
-> 
-> # Step-1: Select one model for downloading, e.g.:
-> pip3 install -U "huggingface_hub[cli]" --upgrade
->
-> hf download deepseek-ai/DeepSeek-V3.2 --local-dir deepseek-ai/DeepSeek-V3.2
-> hf download nvidia/DeepSeek-R1-FP4 --local-dir nvidia/DeepSeek-R1-FP4
-> hf download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
-> hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
-> hf download NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 --local-dir NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4
-> hf download openai/gpt-oss-120b --local-dir openai/gpt-oss-120b
->
-> hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
-> hf download aoi-ot/VibeVoice-1.5B --local-dir aoi-ot/VibeVoice-1.5B
->
-> hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
-> hf download aoi-ot/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
->
-> # Step-2 for NVIDIA GPUs: A100/A800/H100/H800/H20/H200 (80G x 8):
-> docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20251222 --serve=webui --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
->         --try_path ./nvidia/DeepSeek-R1-FP4 \
->         --try_path ./deepseek-ai/DeepSeek-V3.2 \
->         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
->         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
->         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
->         --try_path ./openai/gpt-oss-120b \
->         --try_path ./aoi-ot/VibeVoice-1.5B \
->         --try_path ./aoi-ot/VibeVoice-Large
->
-> # Step-2 for AMD GPUs: MI300x NVFP4/FP8 (192G x 8):
-> docker run -e LOCAL_SIZE=8 -it --rm --ipc=host --net=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
->       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       tutelgroup/deepseek-671b:mi300x8-chat-20251222 --serve=webui --listen_port 8000 \
->         --prompt "Calculate the indefinite integral of 1/sin(x) + x" \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
->         --try_path ./nvidia/DeepSeek-R1-FP4 \
->         --try_path ./deepseek-ai/DeepSeek-V3.2 \
->         --try_path ./NVFP4/Qwen3-235B-A22B-Instruct-2507-FP4 \
->         --try_path ./Qwen/Qwen3-235B-A22B-Instruct-2507-FP8 \
->         --try_path ./Qwen/Qwen3-30B-A3B-FP8 \
->         --try_path ./openai/gpt-oss-120b \
->         --try_path ./aoi-ot/VibeVoice-1.5B \
->         --try_path ./aoi-ot/VibeVoice-Large
->
->
-> # Step-3: Choose one of methods for prompt requests:
->     # For LLM models, open UI using web browsers (Edge/Chromium/Firefox/..)
->     #   or using REST/OpenAI API for direct response to stdout (curl):
->     chromium-browser http://0.0.0.0:8000/
->     curl -X POST http://0.0.0.0:8000/chat -d '{"text": "Given x + 1/x = 1, calculate x^2016 + 1/(x^2016)."}'
->     python3 -m tutel.examples.oai_request --url '0.0.0.0:8000' --prompt 'Hello.'
->
->     # For VibeVoice multimodality models, using REST API to generate audio:
->     curl -X POST http://0.0.0.0:8000/chat -d '{"text": "VibeVoice is a novel framework designed for generating expressive, long-form, multi-speaker conversational audio, such as podcasts, from text."}' > sound_output.mp3
-> ```
-
 ## What's New:
 
+> Image-*20260306*: Support DeepSeek V3.2 Long-context mode for A100/H100/MI300/B200.
+>
 > Image-*20251222*: Fine-tune A100 performance for most models.
 >
 > Image-*20251111*: Integrate Tutel LLM module into VibeVoice for accelerated inference (rtf = 0.07 for single A100).
