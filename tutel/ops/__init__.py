@@ -56,18 +56,14 @@ def to_float8_blockwise(w, block_size=128):
   w.view(torch.uint8)[w.view(torch.uint8) == 128] = 0
   return w, ws
 
-def from_float8_blockwise(w, ws, block_size=128, dtype=torch.bfloat16):
-  shape = w.shape
-  assert w.dtype == torch.float8_e4m3fn
-  assert w.dim() == ws.dim() and w.dim() in (2, 3)
-  if w.dim() == 2:
-    w, ws = w.unsqueeze(0), ws.unsqueeze(0)
-  else:
-    assert w.size(0) == ws.size(0)
-  ph = torch.empty([ws.size(0), ws.size(1) * block_size, ws.size(2) * block_size], dtype=w.dtype, device=w.device)
-  ph[:, :w.size(1), :w.size(2)] = w
-  ph = (ph.view(w.size(0), ws.size(1), block_size, ws.size(2), block_size).to(ws.dtype) * ws.view(w.size(0), ws.size(1), 1, ws.size(2), 1)).view(ph.shape)
-  return ph[:, :w.size(1), :w.size(2)].to(dtype).view(shape)
+def from_float8_blockwise(w, w_scale, block_size=128, dtype=torch.bfloat16):
+  assert (w.size(-1) + block_size - 1) // block_size == w_scale.size(-1)
+  assert (w.size(-2) + block_size - 1) // block_size == w_scale.size(-2)
+  w_out = torch.empty(list(w.shape[:-2]) + [w_scale.size(-2) * block_size, w_scale.size(-1) * block_size], dtype=dtype, device=w.device)
+  w_out.narrow(-2, 0, w.size(-2)).narrow(-1, 0, w.size(-1)).copy_(w.to(w_out.dtype))
+  w_view = w_out.view(list(w.shape[:-2]) + [w_scale.size(-2), block_size, w_scale.size(-1), block_size])
+  w_view *= w_scale.unsqueeze(-2).unsqueeze(-1).to(w_out.dtype)
+  return w_out.narrow(-2, 0, w.size(-2)).narrow(-1, 0, w.size(-1)).contiguous()
 
 def to_float4_groupwise(w):
   assert w.size(-1) % 16 == 0

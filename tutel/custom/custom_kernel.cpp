@@ -1706,7 +1706,6 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("kimi_moe_sigmoid_scaled_topk", warp_kimi_sigmoid_top_8_static_v2);
   m.def("deepseek_moe_sigmoid_scaled_topk", warp_deepseek_sigmoid_top_8_static_v2);
   m.def("rmsnorm_bf16", warp_rmsnorm_bf16);
-  m.def("to_bfloat16", warp_to_bfloat16);
   m.def("to_float8_block", warp_to_float8_block);
   m.def("to_float8_per_token", warp_to_float8_per_token);
   m.def("scaled_mask_inv", warp_scaled_mask_inv);
