@@ -77,13 +77,18 @@ def to_float4_groupwise(w):
   scale_b = (scale_b / scale_o).to(torch.float8_e4m3fn).view(*w.shape[:-1], w.shape[-1] // 16)
   return (fp4_vals[0] + (fp4_vals[1] << 4)).squeeze(-1), scale_b, scale_o
 
-def from_float4_groupwise(w, scale, scale_o=None, input_scale=None):
+def from_float4_groupwise(w, scale, scale_o=None, input_scale=None, dtype=torch.bfloat16):
   assert w.dtype == torch.uint8
   fp4_e2m1_table = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.bfloat16, device=w.device)
   w = w.to(torch.int16)
   w = ((w & 15) + ((w >> 4) << 8)).view(torch.int8).to(torch.int32)
   w = (fp4_e2m1_table.index_select(0, w.flatten()).view(*scale.shape, -1) * scale.bfloat16().unsqueeze(scale.dim())).flatten(-2)
-  return w * scale_o if scale_o is not None else w
+  if scale_o is None:
+    return w
+  prefix = w.shape[:-2]
+  scale_o = scale_o.view(*prefix, -1)
+  w = w.view(*prefix, scale_o.size(-1), w.size(-2) // scale_o.size(-1), w.size(-1)).float() * scale_o.unsqueeze(-1).unsqueeze(-1)
+  return w.view(*prefix, -1, w.size(-1)).to(dtype)
 
 def from_int4_groupwise(x, s, dtype=torch.bfloat16):
   assert x.dim() == 2
@@ -324,6 +329,77 @@ def marlin_unpack(marlin_weight, group_size):
     w_unpacked = pack_weight_4d(w.reshape(E, K, N))
     
     return w_unpacked
+
+def marlin_nvfp4_pack(x: torch.Tensor) -> torch.Tensor:
+    """
+    Input:  x.shape = [E, N, K // 8, 8], dtype=torch.uint8
+    Output: y.shape = [E, K // 16, N << 1], dtype=torch.int32
+    """
+    E, N, G, half_group_size = x.shape
+    K = G * half_group_size * 2
+
+    x_view = x.view(E, N, K // 2)
+    w_unpacked = torch.empty((E, N, K), dtype=torch.int8, device=x.device)
+    w_unpacked[..., 0::2] = x_view & 0x0F
+    w_unpacked[..., 1::2] = (x_view >> 4) & 0x0F
+    w = w_unpacked.transpose(1, 2).contiguous()
+    w = w.reshape(E, K // 16, 2, 4, 2, N // 64, 4, 2, 8)
+    w = w.permute(0, 1, 5, 8, 3, 6, 4, 7, 2)
+    w_pack = w.reshape(E, K // 16, N * 2, 8).to(torch.int32)
+    marlin_weight = w_pack[..., 0].clone()
+    for i in range(1, 8):
+        marlin_weight |= (w_pack[..., i] << (4 * i))
+    return marlin_weight
+
+
+def marlin_nvfp4_revert(y: torch.Tensor) -> torch.Tensor:
+    """
+    Input: y.shape = [E, K // 16, N << 1], dtype=torch.int32
+    Output:  x.shape = [E, N, K // 8, 8], dtype=torch.uint8
+    """
+    E = y.shape[0]
+    K = y.shape[1] * 16
+    N = y.shape[2] // 2
+
+    w_pack = torch.empty((E, K // 16, N * 2, 8), dtype=torch.int8, device=y.device)
+    for i in range(8):
+        w_pack[..., i] = (y >> (4 * i)) & 0x0F
+    w_permuted = w_pack.reshape(E, K // 16, N // 64, 8, 4, 4, 2, 2, 2)
+    w_reshaped = w_permuted.permute(0, 1, 8, 4, 6, 2, 5, 7, 3).contiguous()
+    w = w_reshaped.reshape(E, K, N)
+    w_unpacked = w.transpose(1, 2).contiguous()
+    low = w_unpacked[..., 0::2]
+    high = w_unpacked[..., 1::2]
+    packed_bytes = low.to(torch.uint8) | (high.to(torch.uint8) << 4)
+    x = packed_bytes.view(E, N, K // 16, 8).to(torch.uint8)
+    return x
+
+def marlin_nvfp4_revert_transposed(y: torch.Tensor, nvfp4_groupscale: torch.Tensor, nvfp4_oscale: torch.Tensor) -> torch.Tensor:
+    """
+    Input: y.shape = [E, K // 16, N * 2], dtype=torch.int32
+           nvfp4_groupscale.shape = [E, N, K // group_size], dtype=torch.float8_e4m3fn
+           nvfp4_oscale.shape = [E, L], dtype=torch.float32
+    Output:  z.shape = [E, N, K], dtype=torch.bfloat16
+    """
+    x = marlin_nvfp4_revert(y)
+    E, N, _, _ = x.shape
+    K = y.shape[1] * 16
+    x_flat = x.view(E, N, K // 2)
+    low = x_flat & 0x0F
+    high = (x_flat >> 4) & 0x0F
+    unpacked = torch.stack((low, high), dim=-1).view(E, N, K)
+    lut = torch.tensor([
+         0.0,  0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,
+        -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0
+    ], dtype=torch.bfloat16, device=y.device)
+    w_bf16 = lut[unpacked.to(torch.long)]
+    group_size = K // nvfp4_groupscale.shape[-1]
+    scales_bf16 = nvfp4_groupscale.to(torch.bfloat16)
+    scales_expanded = scales_bf16.repeat_interleave(group_size, dim=-1)
+    z = w_bf16 * scales_expanded
+    z = z.view(z.size(0), nvfp4_oscale.size(1), -1, z.size(-1)).float() * nvfp4_oscale.unsqueeze(-1).unsqueeze(-1)
+    return z.flatten(1, 2).to(scales_bf16.dtype)
+
 
 def __getattr__(name):
   fn = getattr(torch.ops.tutel_ops, name)
