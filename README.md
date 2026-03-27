@@ -16,28 +16,30 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
->   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
+>   hf download nvidia/Kimi-K2.5-NVFP4 --local-dir nvidia/Kimi-K2.5-NVFP4
 >   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
->   hf download moonshotai/Kimi-K2-Instruct --local-dir moonshotai/Kimi-K2-Instruct
+>   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
 > 
 > [DeepSeek V3.2 Long-Context (A100/H100/B200 only)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260306 --serve=webui --listen_port 8000 \
->         --try_path ./nvidia/DeepSeek-V3.2-NVFP4 \
->         --try_path ./nvidia/Kimi-K2-Thinking-NVFP4 \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
->         --max_seq_len 300000  # up to 1,000,000 for H200x8
+>       tutelgroup/deepseek-671b:a100x8-chat-20260327 --serve=webui --listen_port 8000 \
+>         --try_path nvidia/Kimi-K2.5-NVFP4 \
+>         --try_path nvidia/Kimi-K2-Thinking-NVFP4 \
+>         --try_path nvidia/DeepSeek-V3.2-NVFP4 \
+>         --try_path nvidia/DeepSeek-R1-NVFP4 \
+>         --max_seq_len 32768
 > 
 > [DeepSeek V3.2 Long-Context (MI300 only)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260306 --serve=webui --listen_port 8000 \
->         --try_path ./nvidia/DeepSeek-V3.2-NVFP4 \
->         --try_path ./nvidia/Kimi-K2-Thinking-NVFP4 \
->         --try_path ./moonshotai/Kimi-K2-Instruct \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260327 --serve=webui --listen_port 8000 \
+>         --try_path nvidia/Kimi-K2.5-NVFP4 \
+>         --try_path nvidia/Kimi-K2-Thinking-NVFP4 \
+>         --try_path nvidia/DeepSeek-V3.2-NVFP4 \
+>         --try_path nvidia/DeepSeek-R1-NVFP4 \
 >         --max_seq_len 1000000
 > 
 > [OpenAI/Ollama/Direct Request]
@@ -100,6 +102,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260327*: Add support for Kimi-K2.5.
+>
 > Image-*20260306*: Support DeepSeek V3.2 Long-context mode for A100/H100/MI300/B200.
 >
 > Image-*20251222*: Fine-tune A100 performance for most models.
