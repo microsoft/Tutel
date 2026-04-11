@@ -11,6 +11,53 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 <div align="center">Scaling DeepSeek V3.1/3.2 TPOS with Context Size</div>
 
 > [!TIP]
+> #### Steps for GLM-5/5.1 (Claude-Code Mode):
+>
+> ```sh
+> [Model Downloads]
+>   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download --local-dir lukealonso/GLM-5.1-NVFP4 lukealonso/GLM-5.1-NVFP4
+>   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
+>
+> [GLM-5/5.1 (A100/H100/B200 only)]
+>   docker run -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260411 --serve=webui \
+>         --try_path lukealonso/GLM-5.1-NVFP4 \
+>         --try_path nvidia/GLM-5-NVFP4 \
+>         --max_seq_len 128000
+>
+> [GLM-5/5.1 (MI300 only)]
+>   docker run -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260411 --serve=webui \
+>         --try_path lukealonso/GLM-5.1-NVFP4 \
+>         --try_path nvidia/GLM-5-NVFP4 \
+>         --max_seq_len 128000
+>
+> [Claude Code Setup]
+>   curl -sL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+>   sudo apt-get install -y nodejs && sudo npm install -g @anthropic-ai/claude-code@2.1.83
+>
+> [Claude-Code Launch]
+>   mkdir -p config/
+>   export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
+>   export MOCK="api00-local-mock-key"
+>   export ANTHROPIC_API_KEY="sk-ant-${MOCK}"
+>   export CLAUDE_CONFIG_DIR="$(pwd)/config"
+>   echo '{"customApiKeyResponses": {"approved": ["'${MOCK}'"]}}' > config/.claude.json
+>   claude
+>
+>   (prompt)❯ Create an HTML game called "aircraft(烈焰战机)" and save it into aircraft.html.
+>
+> [Chat-Mode over Open WebUI] xdg-open http://0.0.0.0:8000
+
+The example of Claude-code generated aircraft.html can be accessed [here](https://ghostplant.github.io/app/aircraft.html).
+
+
+> [!TIP]
 > #### Steps for DeepSeek V3.2 (Long-Context Mode):
 > 
 > ```sh
