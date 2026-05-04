@@ -1531,6 +1531,10 @@ torch::Tensor warp_gate_gemm_out_bf16(const torch::Tensor &xb, const torch::Tens
   return samples < 4 ? antares::ops::call("gate_gemm_out_bf16", {xb.view(torch::kInt32).view({samples, -1}), gate_w.view(torch::kInt32)}, {}) : torch::matmul(xb, gate_w.t());
 }
 
+torch::Tensor warp_view_as_device(const torch::Tensor &data, const torch::Tensor &dest) {
+  return torch::from_blob(data.data_ptr(), data.sizes(), torch::TensorOptions().dtype(data.dtype()).device(dest.device()));
+}
+
 torch::Tensor warp_copy_to_device(const std::vector<torch::Tensor> &data) {
   CHECK_NE(data.size(), 0);
 
@@ -1709,6 +1713,7 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("topk_token_sort", warp_topk_token_sort);
   m.def("scatter_sample_ids", warp_scatter_sample_ids);
   m.def("copy_to_device", warp_copy_to_device);
+  m.def("view_as_device", warp_view_as_device);
 
   m.def("multi_head_latent_rope_bf16_v2", specialized::warp_multi_head_latent_rope_bf16_v2);
   m.def("glu_expert_bf16xf8_block_scal_16x16_fnuz", specialized::warp_glu_expert_bf16xf8_block_scal_16x16_fnuz);
