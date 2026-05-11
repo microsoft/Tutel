@@ -7,11 +7,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported CPU: fp64/fp32
 - Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
-<div align="center"><img src="doc/DeepSeek-V3.2.png" width="600px" alt="DeepSeek-V3.2"></div>
-<div align="center">Scaling DeepSeek V3.1/3.2 TPOS with Context Size</div>
-
 > [!TIP]
-> #### Steps for GLM-5/5.1 (Claude-Code Mode):
+> #### Steps for GLM-5/5.1 Server (Claude-Code Mode):
 >
 > ```sh
 > [Model Downloads]
@@ -19,50 +16,69 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download --local-dir lukealonso/GLM-5.1-NVFP4 lukealonso/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
-> [GLM-5/5.1 (A100/H100/B200 only)]
+> [ND_A100_80G_v4:Server GLM-5/5.1 (A100/H100/B200 only)]
 >   docker run -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260411 --serve=webui \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260511 --serve=core \
 >         --try_path lukealonso/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
->         --max_seq_len 128000
+>         --max_seq_len 200000
 >
-> [GLM-5/5.1 (MI300 only)]
+> [ND_A100_80G_v4:Server GLM-5/5.1 (MI300 only)]
 >   docker run -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260411 --serve=webui \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260511 --serve=core \
 >         --try_path lukealonso/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
->         --max_seq_len 128000
+>         --max_seq_len 200000
+> ```
+> 
+> #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
+> ```sh
+>   sudo apt-get install -y npm
+>   sudo npm install -g @anthropic-ai/claude-code@2.1.101
+>   cat > run_claude.sh <<EOF && chmod a+x run_claude.sh
+> mkdir -p config/
+> export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
+> export ANTHROPIC_API_KEY="sk-ant-api00-local-mock-key"
+> export CLAUDE_CONFIG_DIR="$(pwd)/config"
+> export DISABLE_AUTOUPDATER=1
+> echo '{"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}}' > config/.claude.json
+> claude
+> EOF
 >
-> [Claude Code Setup]
->   curl -sL https://deb.nodesource.com/setup_20.x | sudo -E bash -
->   sudo apt-get install -y nodejs && sudo npm install -g @anthropic-ai/claude-code@2.1.83
+>   ./run_claude.sh
+> ```
+> 
+> #### Setup Claude Code for Windows (>= 10.0):
+> ```sh
+>   winget install OpenJS.NodeJS.LTS
+>   winget install --id Git.Git -e --source winget
+>   npm install -g @anthropic-ai/claude-code@2.1.101
+>   (
+>     echo(@echo off
+>     echo(if not exist config mkdir config
+>     echo(set ANTHROPIC_BASE_URL=http://0.0.0.0:8000
+>     echo(set ANTHROPIC_API_KEY=sk-ant-api00-local-mock-key
+>     echo(set CLAUDE_CONFIG_DIR=%%cd%%\config
+>     echo(set DISABLE_AUTOUPDATER=1
+>     echo(echo({"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}} ^> config\.claude.json
+>     echo(claude
+>   ) > run_claude.bat
 >
-> [Claude-Code Launch]
->   mkdir -p config/
->   export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
->   export MOCK="api00-local-mock-key"
->   export ANTHROPIC_API_KEY="sk-ant-${MOCK}"
->   export CLAUDE_CONFIG_DIR="$(pwd)/config"
->   echo '{"customApiKeyResponses": {"approved": ["'${MOCK}'"]}}' > config/.claude.json
->   claude
->
->   (prompt)❯ Create an HTML game called "aircraft(烈焰战机)" and save it into aircraft.html.
->
-> [Chat-Mode over Open WebUI] xdg-open http://0.0.0.0:8000
-
-The example of Claude-code generated aircraft.html can be accessed [here](https://ghostplant.github.io/app/aircraft.html).
-
+>   .\run_claude.bat
+> ```
+------------------
 
 > [!TIP]
-> #### Steps for DeepSeek V3.2 (Long-Context Mode):
+> #### Steps for Kimi-K2.6/DeepSeek V3.2 (Long-Context Mode):
 > 
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download moonshotai/Kimi-K2.6 --local-dir moonshotai/Kimi-K2.6
 >   hf download nvidia/Kimi-K2.5-NVFP4 --local-dir nvidia/Kimi-K2.5-NVFP4
 >   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
 >   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
@@ -71,18 +87,20 @@ The example of Claude-code generated aircraft.html can be accessed [here](https:
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260327 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260511 --serve=webui --listen_port 8000 \
+>         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
 >         --try_path nvidia/Kimi-K2-Thinking-NVFP4 \
 >         --try_path nvidia/DeepSeek-V3.2-NVFP4 \
 >         --try_path nvidia/DeepSeek-R1-NVFP4 \
->         --max_seq_len 32768
+>         --max_seq_len 16384
 > 
 > [DeepSeek V3.2 Long-Context (MI300 only)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260327 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260511 --serve=webui --listen_port 8000 \
+>         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
 >         --try_path nvidia/Kimi-K2-Thinking-NVFP4 \
 >         --try_path nvidia/DeepSeek-V3.2-NVFP4 \
@@ -97,6 +115,7 @@ The example of Claude-code generated aircraft.html can be accessed [here](https:
 >   xdg-open http://0.0.0.0:8000
 > ```
 
+------------------
 > [!TIP]
 > #### Steps for Microsoft VibeVoice (Multimodality Mode):
 > 
