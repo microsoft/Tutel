@@ -16,8 +16,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download --local-dir lukealonso/GLM-5.1-NVFP4 lukealonso/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
-> [ND_A100_80G_v4:Server GLM-5/5.1 (A100/H100/B200 only)]
->   docker run -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
+> [ND_A100_80G_v4: Server GLM-5/5.1 (A100/H100/B200 only)]
+>   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260511 --serve=core \
@@ -25,8 +25,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 200000
 >
-> [ND_A100_80G_v4:Server GLM-5/5.1 (MI300 only)]
->   docker run -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
+> [ND_MI300_192G_v5: Server GLM-5/5.1 (MI300 only)]
+>   docker run -e WORKER=32 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20260511 --serve=core \
@@ -83,7 +83,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
 >   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
 > 
-> [DeepSeek V3.2 Long-Context (A100/H100/B200 only)]
+> [DeepSeek V3.2 Long-Context (ND_A100/H100/B200 only)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
@@ -95,7 +95,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path nvidia/DeepSeek-R1-NVFP4 \
 >         --max_seq_len 16384
 > 
-> [DeepSeek V3.2 Long-Context (MI300 only)]
+> [DeepSeek V3.2 Long-Context (ND_MI300_192G_v5 only)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
@@ -128,7 +128,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download microsoft/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
 >   hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
 > 
-> [Microsoft VibeVoice (A100/H100/B200 only)]
+> [Microsoft VibeVoice (ND_A100/H100/B200 only)]
 > docker run -e LOCAL_SIZE=1 -it --rm -p 8001:8000 --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
@@ -137,7 +137,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path ./microsoft/VibeVoice-1.5B \
 >         --try_path ./microsoft/VibeVoice-Large
 > 
-> [Microsoft VibeVoice (MI300 only)]
+> [Microsoft VibeVoice (ND_MI300_192G_v5  only)]
 > docker run -e LOCAL_SIZE=1 -it --rm -p 8001:8000 --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
