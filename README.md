@@ -13,24 +13,24 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
->   hf download --local-dir lukealonso/GLM-5.1-NVFP4 lukealonso/GLM-5.1-NVFP4
+>   hf download --local-dir nvidia/GLM-5.1-NVFP4 nvidia/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
 > [ND_A100_80G_v4: Server GLM-5/5.1 (A100/H100/B200 only)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260511 --serve=core \
->         --try_path lukealonso/GLM-5.1-NVFP4 \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260603 --serve=core \
+>         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 200000
 >
 > [ND_MI300_192G_v5: Server GLM-5/5.1 (MI300 only)]
 >   docker run -e WORKER=32 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260511 --serve=core \
->         --try_path lukealonso/GLM-5.1-NVFP4 \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260603 --serve=core \
+>         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 200000
 > ```
@@ -43,7 +43,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > mkdir -p config/
 > export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
 > export ANTHROPIC_API_KEY="sk-ant-api00-local-mock-key"
-> export CLAUDE_CONFIG_DIR="$(pwd)/config"
+> export CLAUDE_CONFIG_DIR="config"
 > export DISABLE_AUTOUPDATER=1
 > echo '{"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}}' > config/.claude.json
 > claude
@@ -62,7 +62,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >     echo(if not exist config mkdir config
 >     echo(set ANTHROPIC_BASE_URL=http://0.0.0.0:8000
 >     echo(set ANTHROPIC_API_KEY=sk-ant-api00-local-mock-key
->     echo(set CLAUDE_CONFIG_DIR=%%cd%%\config
+>     echo(set CLAUDE_CONFIG_DIR=config
 >     echo(set DISABLE_AUTOUPDATER=1
 >     echo(echo({"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}} ^> config\.claude.json
 >     echo(claude
@@ -152,7 +152,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 
 #### Inference TPOS for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/..:
-> |  ***Model \& Machine Type*** | ***Precision*** | ***SGL***  | ***Tutel***  |
+> |  ***Model \& Machine Type*** | ***Precision*** | ***SGL*** (no-MTP) | ***Tutel*** (no-MTP) |
 > |  ----  | ----  | ----  | ----  |
 > | $deepseek-ai/DeepSeek-V3.2\ (671B,\ A100 \times 8)$ | nvfp4 | - | 102 |
 > | $deepseek-ai/DeepSeek-V3.2\ (671B,\ MI300 \times 8)$ | nvfp4 | - | 151 |
@@ -168,6 +168,10 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260603*: Improved Claude Code Tooling Performance for GLM-5/5.1.
+>
+> Image-*20260511*: Initial Claude Code Support for GLM-5/5.1.
+>
 > Image-*20260327*: Add support for Kimi-K2.5.
 >
 > Image-*20260306*: Support DeepSeek V3.2 Long-context mode for A100/H100/MI300/B200.
