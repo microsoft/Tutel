@@ -1324,41 +1324,42 @@ std::tuple<torch::Tensor, torch::Tensor> warp_multi_head_latent_rope_bf16_v5(
 #endif
 #endif
 
-torch::Tensor warp_deepseek_custom_mla_bf16(
-  const torch::Tensor &x,
+std::vector<torch::Tensor> warp_deepseek_custom_mla_v2_bf16(
+  const torch::Tensor &Q,
   const torch::Tensor &key_cache,
   const torch::Tensor &kv_range,
   const torch::Tensor &kv_indices,
-  const torch::Tensor &wvc,
+  const torch::Tensor &splitData,
+  const torch::Tensor &splitLse,
   double softmax_scale,
-  bool update_indices,
-  int64_t opt
+  bool full_stage
 ) {
-  CHECK_CUDA(x);
-  CHECK_EQ(x.dim(), 4);
-  int batch = x.size(0), seqlen = x.size(1);
+  CHECK_CUDA(Q);
+  CHECK_EQ(Q.dim(), 4);
+  int batch = Q.size(0), seqlen = Q.size(1);
   CHECK_EQ(seqlen, 1);
 
   {
-    auto Q = x;
 #if defined(CUSTOM_MLA_DECODE)
     {
-      if (update_indices)
-        antares::ops::call("kv_range_to_indice", {kv_range.narrow(0, 0, kv_range.size(0) - 1), kv_indices}, {});
-
-      Q = mla_decode_fwd(Q, key_cache, kv_range, kv_indices, softmax_scale).view({batch * seqlen, Q.size(-2), -1});
-      if (opt == 0)
-        Q = antares::ops::call("wvc_logits_bf16", {Q.view(torch::kInt32), wvc.view(torch::kInt32)}, {});
-      else
-        Q = at::einsum("bhc,hdc->bhd", {Q, wvc}).contiguous();
+      return mla_decode_fwd(Q, key_cache, kv_range, kv_indices, splitData, splitLse, softmax_scale, full_stage);
     }
 #else
     {
       AT_ASSERTM(false, "Custom MLA not implemented.");
+      return {};
     }
 #endif
-    return Q.view({batch, seqlen, -1});
   }
+}
+
+torch::Tensor warp_deepseek_mvcache_bf16(const torch::Tensor &Q, const torch::Tensor &wvc, int64_t flags) {
+  CHECK_EQ(Q.size(2), wvc.size(2));
+  CHECK_EQ(Q.size(1), wvc.size(0));
+  if (flags == 0)
+    return antares::ops::call("wvc_logits_bf16", {Q.view(torch::kInt32), wvc.view(torch::kInt32)}, {});
+  else
+    return at::einsum("bhc,hdc->bhd", {Q, wvc});
 }
 
 static torch::Tensor warp_intra_add_allreduce_bf16(const torch::Tensor &x, const torch::Tensor &t,
@@ -1696,7 +1697,8 @@ TORCH_LIBRARY(tutel_ops, m) {
   m.def("gate_gemm_out_bf16", warp_gate_gemm_out_bf16);
   m.def("intra_add_allreduce_bf16", warp_intra_add_allreduce_bf16);
   m.def("gemm_nt_bf16xfp8_block_scal_out", warp_gemm_nt_bf16xfp8_block_scal_out);
-  m.def("deepseek_custom_mla_bf16", warp_deepseek_custom_mla_bf16);
+  m.def("deepseek_custom_mla_v2_bf16", warp_deepseek_custom_mla_v2_bf16);
+  m.def("deepseek_mvcache_bf16", warp_deepseek_mvcache_bf16);
   m.def("multi_head_latent_rope_bf16_v4", warp_multi_head_latent_rope_bf16_v4);
   m.def("multi_head_latent_rope_bf16_v5", warp_multi_head_latent_rope_bf16_v5);
   m.def("glu_expert_bf16xf8_block_scal", warp_glu_expert_bf16xf8_block_scal);

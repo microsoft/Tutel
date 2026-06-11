@@ -122,16 +122,18 @@ struct __attribute__((packed)) Kernel2Args
     unsigned int s0, s1, s2, s3, s4;
 };
 
-static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr, torch::Tensor kv_indices, double softmax_scale) {
+static std::vector<torch::Tensor> mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr, torch::Tensor kv_indices, torch::Tensor splitData, torch::Tensor splitLse,
+  double softmax_scale, bool full_stage = true) {
+    const int splits = splitData.size(1);
     if (Q.dim() == 4)
       Q = Q.flatten(0, 1);
     int batch = Q.size(0);
 
     KV = KV.view({-1, 1, 1, KV.size(-1)});
-    static const int splits = 32;
 
     AiterAsmKernel *impl_comb = nullptr;
-    if (splits == 32) {
+    if (!full_stage) ;
+    else if (splits == 32) {
 #include "mla_stage2_a16w16_bf16_kvsplit32.h"
       static AiterAsmKernel impl_a16w16_bf16("mla_stage2_a16w16_bf16", mla_stage2_a16w16_bf16);
       impl_comb = &impl_a16w16_bf16;
@@ -145,12 +147,8 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
     static torch::Tensor kv_last_page_lens;
     if (kv_last_page_lens.numel() == 0) {
       int stride = KV.size(0);
-      kv_last_page_lens = torch::ones({65536}, torch::TensorOptions().dtype(torch::kInt32).device(Q.device()));
+      kv_last_page_lens = torch::ones({1 << 25}, torch::TensorOptions().dtype(torch::kInt32).device(Q.device()));
     }
-
-    auto splitData = torch::empty({batch, splits, Q.size(1), 512}, torch::TensorOptions().dtype(torch::kFloat32).device(Q.device()));
-    auto splitLse = torch::empty({batch, splits, Q.size(1), 1}, torch::TensorOptions().dtype(torch::kFloat32).device(Q.device()));
-    auto output = torch::empty({batch, Q.size(1), 512}, torch::TensorOptions().dtype(Q.dtype()).device(Q.device()));
 
     int num_seqs = Q.size(0);
     int num_heads = Q.size(1);
@@ -210,6 +208,11 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
                              1,                     // bdz
                              stream});
 
+    if (!full_stage)
+      return {splitData.transpose(1, 2), splitLse.squeeze(-1).transpose(1, 2)};
+
+    auto output = torch::empty({batch, Q.size(1), 512}, torch::TensorOptions().dtype(Q.dtype()).device(Q.device()));
+
     Kernel2Args args2;
     size_t arg2_size = sizeof(args2);
     args2.p0 = splitData.data_ptr();
@@ -231,6 +234,6 @@ static torch::Tensor mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Te
                              1,                     // bdy
                              1,                     // bdz
                              stream});
-    return output;
+    return {output};
 }
 
