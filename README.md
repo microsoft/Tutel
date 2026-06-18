@@ -8,11 +8,12 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
 > [!TIP]
-> #### Steps for GLM-5/5.1 Server (Claude-Code Mode):
+> #### Steps for GLM-5/5.1/5.2 (Claude-Code Mode):
 >
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download --local-dir lukealonso/GLM-5.2-NVFP4 lukealonso/GLM-5.2-NVFP4
 >   hf download --local-dir nvidia/GLM-5.1-NVFP4 nvidia/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
@@ -20,19 +21,21 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260603 --serve=core \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260618 --serve=core \
+>         --try_path lukealonso/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
->         --max_seq_len 200000
+>         --max_seq_len 1000000
 >
 > [ND_MI300_192G_v5: Server GLM-5/5.1 (MI300 only)]
->   docker run -e WORKER=32 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
+>   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260603 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260618 --serve=core \
+>         --try_path lukealonso/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
->         --max_seq_len 200000
+>         --max_seq_len 1000000
 > ```
 > 
 > #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
@@ -73,11 +76,12 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 ------------------
 
 > [!TIP]
-> #### Steps for Kimi-K2.6/DeepSeek V3.2 (Long-Context Mode):
+> #### Steps for Kimi-K2.6/2.7/DeepSeek V3.2 (Long-Context Mode):
 > 
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download moonshotai/Kimi-K2.7-Code --local-dir moonshotai/Kimi-K2.7-Code
 >   hf download moonshotai/Kimi-K2.6 --local-dir moonshotai/Kimi-K2.6
 >   hf download nvidia/Kimi-K2.5-NVFP4 --local-dir nvidia/Kimi-K2.5-NVFP4
 >   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
@@ -87,7 +91,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260511 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260618 --serve=webui --listen_port 8000 \
+>         --try_path moonshotai/Kimi-K2.7-Code \
 >         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
 >         --try_path nvidia/Kimi-K2-Thinking-NVFP4 \
@@ -99,7 +104,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260511 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260618 --serve=webui --listen_port 8000 \
+>         --try_path moonshotai/Kimi-K2.7-Code \
 >         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
 >         --try_path nvidia/Kimi-K2-Thinking-NVFP4 \
@@ -168,6 +174,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260618*: Fit GLM-5.2 1M context into A100 80GB x 8 SXM.
+>
 > Image-*20260603*: Improved Claude Code Tooling Performance for GLM-5/5.1.
 >
 > Image-*20260511*: Initial Claude Code Support for GLM-5/5.1.
