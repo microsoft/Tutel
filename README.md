@@ -13,26 +13,26 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
->   hf download --local-dir lukealonso/GLM-5.2-NVFP4 lukealonso/GLM-5.2-NVFP4
+>   hf download --local-dir zai-org/GLM-5.2-FP8 zai-org/GLM-5.2-FP8
 >   hf download --local-dir nvidia/GLM-5.1-NVFP4 nvidia/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
-> [ND_A100_80G_v4: Server GLM-5/5.1 (A100/H100/B200 only)]
+> [ND_A100_80G_v4: Server GLM-5/5.1/5.2 (for Azure A100x8/H100x8/B200x8 SXM)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260618 --serve=core \
->         --try_path lukealonso/GLM-5.2-NVFP4 \
+>         --try_path zai-org/GLM-5.2-FP8 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 1000000
 >
-> [ND_MI300_192G_v5: Server GLM-5/5.1 (MI300 only)]
+> [ND_MI300_192G_v5: Server GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20260618 --serve=core \
->         --try_path lukealonso/GLM-5.2-NVFP4 \
+>         --try_path zai-org/GLM-5.2-FP8 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 1000000
@@ -87,7 +87,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
 >   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
 > 
-> [DeepSeek V3.2 Long-Context (ND_A100/H100/B200 only)]
+> [DeepSeek V3.2 Long-Context (for Azure A100x8/H100x8/B200x8 SXM)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
@@ -100,7 +100,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path nvidia/DeepSeek-R1-NVFP4 \
 >         --max_seq_len 16384
 > 
-> [DeepSeek V3.2 Long-Context (ND_MI300_192G_v5 only)]
+> [DeepSeek V3.2 Long-Context (for Azure MI300x8 PCIe)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
