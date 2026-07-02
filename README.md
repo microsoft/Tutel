@@ -13,7 +13,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
->   hf download --local-dir zai-org/GLM-5.2-FP8 zai-org/GLM-5.2-FP8
+>   hf download --local-dir nvidia/GLM-5.2-NVFP4 nvidia/GLM-5.2-NVFP4
 >   hf download --local-dir nvidia/GLM-5.1-NVFP4 nvidia/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
@@ -22,7 +22,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260618 --serve=core \
->         --try_path zai-org/GLM-5.2-FP8 \
+>         --try_path nvidia/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 1000000
@@ -32,7 +32,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20260618 --serve=core \
->         --try_path zai-org/GLM-5.2-FP8 \
+>         --try_path nvidia/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 1000000
@@ -41,7 +41,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
 > ```sh
 >   sudo apt-get install -y npm
->   sudo npm install -g @anthropic-ai/claude-code@2.1.101
+>   sudo npm install -g @anthropic-ai/claude-code@2.1.90
 >   cat > run_claude.sh <<EOF && chmod a+x run_claude.sh
 > mkdir -p config/
 > export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
@@ -59,7 +59,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 >   winget install OpenJS.NodeJS.LTS
 >   winget install --id Git.Git -e --source winget
->   npm install -g @anthropic-ai/claude-code@2.1.101
+>   npm install -g @anthropic-ai/claude-code@2.1.90
 >   (
 >     echo(@echo off
 >     echo(if not exist config mkdir config
