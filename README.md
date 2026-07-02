@@ -5,7 +5,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 - Supported Framework: Pytorch (recommend: >= 2.0)
 - Supported GPUs: CUDA(fp64/fp32/fp16/bf16), ROCm(fp64/fp32/fp16/bf16)
 - Supported CPU: fp64/fp32
-- Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based DeepSeek / Kimi / Qwen3 / GptOSS using A100/A800/H100/MI300/..
+- Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based GLM-5.x / DeepSeek-3.x / Kimi-2.x / Qwen3 / GptOSS using A100/A800/H100/MI300/..
 
 > [!TIP]
 > #### Steps for GLM-5/5.1/5.2 (Claude-Code Mode):
