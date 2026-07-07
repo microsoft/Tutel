@@ -1,4 +1,4 @@
-# Tutel
+<img width="52" height="53" alt="image" src="https://github.com/user-attachments/assets/ed69b561-2464-4d6b-a7d8-3158e96d1f09" /># Tutel
 
 Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors.
 
@@ -10,7 +10,17 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > [!TIP]
 > #### Steps for GLM-5/5.1/5.2 (Claude-Code Mode):
 >
+> ☑ A100/H100 80Gx8 (SXM): max-context-size = 1M
+>
+> ☑ MI300 192GBx8 (PCIe5): max-context-size = 1M × N
+> 
 > ```sh
+> +---------------+--------------------+--------------------+
+> |               | AIME-26 (No Tools) | AIME-26 (Tool Use) |
+> +---------------+--------------------+--------------------+
+> | GLM-5.2 NVFP4 |      93.0%         |       99.6%        |
+> +---------------+--------------------+--------------------+
+> 
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
 >   hf download --local-dir nvidia/GLM-5.2-NVFP4 nvidia/GLM-5.2-NVFP4
@@ -21,7 +31,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260618 --serve=core \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=core \
 >         --try_path nvidia/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
@@ -31,7 +41,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260618 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260707 --serve=core \
 >         --try_path nvidia/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
@@ -41,7 +51,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
 > ```sh
 >   sudo apt-get install -y npm
->   sudo npm install -g @anthropic-ai/claude-code@2.1.90
+>   sudo npm install -g @anthropic-ai/claude-code@2.1.197
 >   cat > run_claude.sh <<EOF && chmod a+x run_claude.sh
 > mkdir -p config/
 > export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
@@ -91,7 +101,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260618 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=webui --listen_port 8000 \
 >         --try_path moonshotai/Kimi-K2.7-Code \
 >         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
@@ -104,7 +114,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260618 --serve=webui --listen_port 8000 \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260707 --serve=webui --listen_port 8000 \
 >         --try_path moonshotai/Kimi-K2.7-Code \
 >         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
@@ -131,7 +141,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download microsoft/VibeVoice-1.5B --local-dir microsoft/VibeVoice-1.5B
 >   hf download Qwen/Qwen2.5-1.5B --local-dir Qwen/Qwen2.5-1.5B
 >
->   hf download microsoft/VibeVoice-Large --local-dir aoi-ot/VibeVoice-Large
+>   hf download aoi-ot/VibeVoice-Large --local-dir microsoft/VibeVoice-Large
 >   hf download Qwen/Qwen2.5-7B --local-dir Qwen/Qwen2.5-7B
 > 
 > [Microsoft VibeVoice (ND_A100/H100/B200 only)]
@@ -174,6 +184,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260707*: Memory fixes for 1M context on A100 80GB SXM.
+>
 > Image-*20260618*: Fit GLM-5.2 1M context into A100 80GB x 8 SXM.
 >
 > Image-*20260603*: Improved Claude Code Tooling Performance for GLM-5/5.1.
