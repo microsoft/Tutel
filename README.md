@@ -10,9 +10,9 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > [!TIP]
 > #### Steps for GLM-5/5.1/5.2 (Claude-Code Mode):
 >
-> ☑ A100/H100 80Gx8 (SXM): max-context-size = 1M
+> ☑ A100x8/H100x8 (80G SXM): max-context-size = 1M
 >
-> ☑ MI300 192GBx8 (PCIe5): max-context-size = 1M × N
+> ☑ MI300x8 (192GB PCIe5): max-context-size = 1M × N
 > 
 > ```sh
 > +---------------+--------------------+--------------------+
