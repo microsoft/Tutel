@@ -1,4 +1,4 @@
-<img width="52" height="53" alt="image" src="https://github.com/user-attachments/assets/ed69b561-2464-4d6b-a7d8-3158e96d1f09" /># Tutel
+# Tutel
 
 Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors.
 
