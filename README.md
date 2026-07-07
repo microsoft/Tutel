@@ -69,7 +69,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 >   winget install OpenJS.NodeJS.LTS
 >   winget install --id Git.Git -e --source winget
->   npm install -g @anthropic-ai/claude-code@2.1.90
+>   npm install -g @anthropic-ai/claude-code@2.1.197
 >   (
 >     echo(@echo off
 >     echo(if not exist config mkdir config
