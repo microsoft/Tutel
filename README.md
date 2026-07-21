@@ -18,7 +18,9 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > +---------------+--------------------+--------------------+
 > |   [GLM-5.2]   | (NVFP4 + No Tools) | (NVFP4 + Tool Use) |
 > +---------------+--------------------+--------------------+
-> |   AIME-2025   |      96.1%         |       99.5%        |
+> |   OAI/GSM8K   |      97.1%         |       97.8%        |
+> +---------------+--------------------+--------------------+
+> |   AIME-2025   |      96.1%         |       99.7%        |
 > +---------------+--------------------+--------------------+
 > |   AIME-2026   |      93.5%         |       99.6%        |
 > +---------------+--------------------+--------------------+
@@ -43,7 +45,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260707 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260721 --serve=core \
 >         --try_path nvidia/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
