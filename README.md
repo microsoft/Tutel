@@ -1,62 +1,66 @@
 # Tutel
 
-Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors.
-
-- Supported Framework: Pytorch (recommend: >= 2.0)
-- Supported GPUs: CUDA(fp64/fp32/fp16/bf16), ROCm(fp64/fp32/fp16/bf16)
-- Supported CPU: fp64/fp32
-- Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based GLM-5.x / DeepSeek-3.x / Kimi-2.x / Qwen3 / GptOSS using A100/A800/H100/MI300/..
+Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors. Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based GLM-5.x / DeepSeek-3.x / Kimi-2.x / Kimi-3.x / Qwen3 / Gpt-OSS using A100/A800/H100/MI300/..
 
 > [!TIP]
-> #### Steps for GLM-5/5.1/5.2 (Claude-Code Mode):
+> #### Steps for Kimi-K3/GLM-5.x (Claude-Code Mode):
 >
-> ☑ A100x8/H100x8 (80G SXM): max-context-size = 1M
+> ☑ A100x8/H100x8 (80G SXM) for GLM-5.x (0.8T): max-context-size = 1M
+> 
+> ☑ MI300x8 (192GB PCIe5) for GLM-5.x (0.8T): max-context-size = 1M
+> 
+> ☑ MI300x8 (192GB PCIe5) for Kimi K3 (2.8T): max-context-size = 1M
+> 
+> | Azure GPU Type (x8) | ***vLLM/SGL Kimi K3*** (no-MTP) | ***Tutel Kimi K3*** (no-MTP) |
+> |  ----  | ----  | ----  |
+> | AMD MI300X 2023 (750W x8) | 0 t/s (OoM) | 73.4 t/s |
+> | AMD MI325X 2024 (1000W x8) | 3.1 t/s  | 82.0 t/s |
+> | AMD MI355X 2025 (1400W x8) | 43.5 t/s | (TBD, no environment available) |
+> | NVIDIA B200 2024 (1000W x8) | 0 t/s (OoM)  | (TBD, no environment available) |
+> 
+> |  | FP4 + No Tools | FP4 + Tool Use |
+> |  ----  | ----  | ----  |
+> | Kimi-K3 @ GSM8K | 96.9%  | 97.3% |
+> | GLM-5.2 @ GSM8K | 97.1%  | 97.8% |
+> | GLM-5.2 @ AIME25 | 96.1%  | 99.7% |
+> | GLM-5.2 @ AIME26 | 93.5%  | 99.6% |
 >
-> ☑ MI300x8 (192GB PCIe5): max-context-size = 1M × N
+> ***K3 Known Issues***: *(1) Kimi K3 support for MI300x/MI325x instead of A100x8 (GLM-5 only); (2) Limited by device memory, Kimi K3 only enables bsz=1 for MI300x8 (to be fixed soon);*
 > 
 > ```sh
-> +---------------+--------------------+--------------------+
-> |   [GLM-5.2]   | (NVFP4 + No Tools) | (NVFP4 + Tool Use) |
-> +---------------+--------------------+--------------------+
-> |   OAI/GSM8K   |      97.1%         |       97.8%        |
-> +---------------+--------------------+--------------------+
-> |   AIME-2025   |      96.1%         |       99.7%        |
-> +---------------+--------------------+--------------------+
-> |   AIME-2026   |      93.5%         |       99.6%        |
-> +---------------+--------------------+--------------------+
 > 
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
+>   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
 >   hf download --local-dir nvidia/GLM-5.2-NVFP4 nvidia/GLM-5.2-NVFP4
 >   hf download --local-dir nvidia/GLM-5.1-NVFP4 nvidia/GLM-5.1-NVFP4
 >   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
 >
-> [ND_A100_80G_v4: Server GLM-5/5.1/5.2 (for Azure A100x8/H100x8/B200x8 SXM)]
+> [ND_MI300_192G_v5: Serve Kimi-K3/GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
+>   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
+>       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
+>       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260808 --serve=core \
+>         --try_path moonshotai/Kimi-K3 \
+>         --try_path nvidia/GLM-5.2-NVFP4 \
+>         --try_path nvidia/GLM-5.1-NVFP4 \
+>         --try_path nvidia/GLM-5-NVFP4 \
+>         --max_seq_len 120000
+>
+> [ND_A100_80G_v4: Serve GLM-5/5.1/5.2 (for Azure A100x8/H100x8/B200x8 SXM)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=core \
 >         --try_path nvidia/GLM-5.2-NVFP4 \
->         --try_path nvidia/GLM-5.1-NVFP4 \
->         --try_path nvidia/GLM-5-NVFP4 \
->         --max_seq_len 1000000
->
-> [ND_MI300_192G_v5: Server GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
->   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
->       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
->       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260721 --serve=core \
->         --try_path nvidia/GLM-5.2-NVFP4 \
->         --try_path nvidia/GLM-5.1-NVFP4 \
->         --try_path nvidia/GLM-5-NVFP4 \
 >         --max_seq_len 1000000
 > ```
 > 
 > #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
 > ```sh
->   sudo apt-get install -y npm
->   sudo npm install -g @anthropic-ai/claude-code@2.1.197
->   cat > run_claude.sh <<EOF && chmod a+x run_claude.sh
+> sudo apt-get install -y npm
+> sudo npm install -g @anthropic-ai/claude-code@2.1.197
+> cat > run_claude.sh <<EOF && chmod a+x run_claude.sh
 > mkdir -p config/
 > export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
 > export ANTHROPIC_API_KEY="sk-ant-api00-local-mock-key"
@@ -66,14 +70,14 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > claude
 > EOF
 >
->   ./run_claude.sh
+> ./run_claude.sh
 > ```
 > 
 > #### Setup Claude Code for Windows (>= 10.0):
 > ```sh
->   winget install OpenJS.NodeJS.LTS
->   winget install --id Git.Git -e --source winget
->   npm install -g @anthropic-ai/claude-code@2.1.197
+> winget install OpenJS.NodeJS.LTS
+> winget install --id Git.Git -e --source winget
+> npm install -g @anthropic-ai/claude-code@2.1.197
 >   (
 >     echo(@echo off
 >     echo(if not exist config mkdir config
@@ -83,9 +87,9 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >     echo(set DISABLE_AUTOUPDATER=1
 >     echo(echo({"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}} ^> config\.claude.json
 >     echo(claude
->   ) > run_claude.bat
+> ) > run_claude.bat
 >
->   .\run_claude.bat
+> .\run_claude.bat
 > ```
 ------------------
 
@@ -188,6 +192,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260808*: Support 1M context for Kimi K3 on MI300 192GB PCIe-5.
+>
 > Image-*20260707*: Memory fixes for 1M context on A100 80GB SXM.
 >
 > Image-*20260618*: Fit GLM-5.2 1M context into A100 80GB x 8 SXM.
