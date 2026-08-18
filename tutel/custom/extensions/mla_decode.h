@@ -123,7 +123,7 @@ struct __attribute__((packed)) Kernel2Args
 };
 
 static std::vector<torch::Tensor> mla_decode_fwd(torch::Tensor Q, torch::Tensor KV, torch::Tensor kv_indptr, torch::Tensor kv_indices, torch::Tensor splitData, torch::Tensor splitLse,
-  double softmax_scale, bool full_stage = true) {
+  double softmax_scale, bool full_stage = true, int64_t Q_heads = 0) {
     const int splits = splitData.size(1);
     if (Q.dim() == 4)
       Q = Q.flatten(0, 1);
@@ -190,7 +190,23 @@ static std::vector<torch::Tensor> mla_decode_fwd(torch::Tensor Q, torch::Tensor 
                 __func__, ":only support head_size == KV.size(3) for now");
     CHECK_EQ(Q.dtype(), at::ScalarType::BFloat16);
 
-    {
+    if (Q_heads == 128) {
+#include "mla_mi300/mla_stage1_a16w16_bf16_batch_base_128.h"
+        static AiterAsmKernel impl_a16w16_bf16("mla_stage1_a16w16_bf16", mla_stage1_a16w16_bf16);
+        impl_ptr = &impl_a16w16_bf16;
+    } else if (Q_heads == 96) {
+#include "mla_mi300/mla_stage1_a16w16_bf16_batch_base_96.h"
+        static AiterAsmKernel impl_a16w16_bf16("mla_stage1_a16w16_bf16", mla_stage1_a16w16_bf16);
+        impl_ptr = &impl_a16w16_bf16;
+    } else if (Q_heads == 64) {
+#include "mla_mi300/mla_stage1_a16w16_bf16_batch_base_64.h"
+        static AiterAsmKernel impl_a16w16_bf16("mla_stage1_a16w16_bf16", mla_stage1_a16w16_bf16);
+        impl_ptr = &impl_a16w16_bf16;
+    } else if (Q_heads <= 16 && Q_heads > 0) {
+#include "mla_mi300/mla_stage1_a16w16_bf16_batch_base_16.h"
+        static AiterAsmKernel impl_a16w16_bf16("mla_stage1_a16w16_bf16", mla_stage1_a16w16_bf16);
+        impl_ptr = &impl_a16w16_bf16;
+    } else {
 #include "mla_stage1_a16w16_bf16.h"
         static AiterAsmKernel impl_a16w16_bf16("mla_stage1_a16w16_bf16", mla_stage1_a16w16_bf16);
         impl_ptr = &impl_a16w16_bf16;
@@ -208,8 +224,11 @@ static std::vector<torch::Tensor> mla_decode_fwd(torch::Tensor Q, torch::Tensor 
                              1,                     // bdz
                              stream});
 
-    if (!full_stage)
+    if (!full_stage) {
+      if (Q_heads > 0)
+        return {splitData, splitLse.squeeze(-1)};
       return {splitData.transpose(1, 2), splitLse.squeeze(-1).transpose(1, 2)};
+    }
 
     auto output = torch::empty({batch, Q.size(1), 512}, torch::TensorOptions().dtype(Q.dtype()).device(Q.device()));
 

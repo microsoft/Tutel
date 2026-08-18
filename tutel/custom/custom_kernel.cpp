@@ -1336,13 +1336,12 @@ std::vector<torch::Tensor> warp_deepseek_custom_mla_v2_bf16(
 ) {
   CHECK_CUDA(Q);
   CHECK_EQ(Q.dim(), 4);
-  int batch = Q.size(0), seqlen = Q.size(1);
-  CHECK_EQ(seqlen, 1);
 
   {
 #if defined(CUSTOM_MLA_DECODE)
     {
-      return mla_decode_fwd(Q, key_cache, kv_range, kv_indices, splitData, splitLse, softmax_scale, full_stage);
+      int Q_heads = (Q.size(1) == 1) ? 0 : Q.size(1) * Q.size(2);
+      return mla_decode_fwd(Q.view({splitData.size(0), 1, -1, Q.size(-1)}), key_cache, kv_range, kv_indices, splitData, splitLse, softmax_scale, full_stage, Q_heads);
     }
 #else
     {
