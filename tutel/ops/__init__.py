@@ -65,17 +65,23 @@ def from_float8_blockwise(w, w_scale, block_size=128, dtype=torch.bfloat16):
   w_view *= w_scale.unsqueeze(-2).unsqueeze(-1).to(w_out.dtype)
   return w_out.narrow(-2, 0, w.size(-2)).narrow(-1, 0, w.size(-1)).contiguous()
 
-def to_float4_groupwise(w):
-  assert w.size(-1) % 16 == 0
-  x = w.view(-1, 16)
-  scale_b = x.abs().amax(-1, keepdim=True).float() / 6
-  scale_b = torch.where(scale_b > 1e-4, scale_b, 1e-4).to(scale_b.dtype)
-  boundaries = torch.tensor([-10, -5, -3.5, -2.5, -1.75, -1.25, -0.75, -0.25, 0, 0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5], dtype=torch.float32, device=w.device)
-  map_ids = torch.tensor([0, 15, 14, 13, 12, 11, 10,  9,  0,  8,  1,  2,  3,  4,  5,  6,  7], dtype=torch.uint8, device=w.device)
-  scale_o = scale_b.amax() / 448
-  fp4_vals = map_ids.index_select(0, torch.bucketize(x / scale_b, boundaries, right=True, out_int32=True).clamp(1, 16).flatten()).view(*w.shape[:-1], w.shape[-1] // 2, 2).chunk(2, dim=-1)
-  scale_b = (scale_b / scale_o).to(torch.float8_e4m3fn).view(*w.shape[:-1], w.shape[-1] // 16)
-  return (fp4_vals[0] + (fp4_vals[1] << 4)).squeeze(-1), scale_b, scale_o
+def to_float4_groupwise(w, scale_target=448.0, clip_ratio=1.0):
+    group_size=16
+    assert group_size > 0 and group_size % 2 == 0
+    assert w.size(-1) % group_size == 0
+    assert scale_target > 0
+    assert 0 < clip_ratio <= 1
+    x = w.reshape(-1, group_size)
+    scale_b = x.abs().amax(-1, keepdim=True).float() / 6 * clip_ratio
+    scale_b_safe = torch.where(scale_b > 0, scale_b, torch.ones_like(scale_b))
+    boundaries = torch.tensor([-10, -5, -3.5, -2.5, -1.75, -1.25, -0.75, -0.25, 0, 0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5], dtype=torch.float32, device=w.device)
+    map_ids = torch.tensor([0, 15, 14, 13, 12, 11, 10, 9, 0, 8, 1, 2, 3, 4, 5, 6, 7], dtype=torch.uint8, device=w.device)
+    max_scale = scale_b.amax()
+    fp8_max = torch.finfo(torch.float8_e4m3fn).max
+    scale_o = torch.where(max_scale > 0, max_scale / scale_target, torch.ones_like(max_scale))
+    fp4_vals = map_ids.index_select(0, torch.bucketize(x / scale_b_safe, boundaries, right=True, out_int32=True).clamp(1, 16).flatten()).view(*w.shape[:-1], w.shape[-1] // 2, 2).chunk(2, dim=-1)
+    scale_b = (scale_b / scale_o).clamp(max=fp8_max).to(torch.float8_e4m3fn).view(*w.shape[:-1], w.shape[-1] // group_size)
+    return (fp4_vals[0] + (fp4_vals[1] << 4)).squeeze(-1), scale_b, scale_o
 
 def from_float4_groupwise(w, scale, scale_o=None, input_scale=None, dtype=torch.bfloat16):
   assert w.dtype == torch.uint8
