@@ -5,61 +5,60 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > [!TIP]
 > #### Steps for Kimi-K3/GLM-5.x (Claude-Code Mode):
 >
-> ☑ A100x8/H100x8 (80G SXM) for GLM-5.x (0.8T): max-context-size = 1M
+> ☑ A100x8/H100x8 (80G SXM) for GLM-5.x (0.8TB): max-context-size = 1M
 > 
-> ☑ MI300x8/MI325x8 (192GB PCIe5) for GLM-5.x (0.8T): max-context-size = 1M
+> ☑ MI300x8/MI325x8 (192GB PCIe5) for GLM-5.x (0.8TB): max-context-size = 1M
 > 
-> ☑ MI300x8/MI325x8 (192GB PCIe5) for Kimi K3 (2.8T): max-context-size = 1M
-> 
-> | Azure GPU Type (x8) | ***vLLM/SGL Kimi K3*** | ***Tutel Kimi K3*** |
-> |  ----  | ----  | ----  |
-> | AMD MI300X 2023 (750W x8) | 0 t/s (MTP=0, OoM) | 73.4 t/s (MTP=0) |
-> |   | 0 t/s (MTP=8, OoM) | 287.1 t/s (MTP=8, ×TAR) |
-> | AMD MI325X 2024 (1000W x8) | 3.1 t/s (MTP=0)  | 82.0 t/s (MTP=0) |
-> |   | 0 t/s (MTP=8, OoM) | 315.2 t/s (MTP=8, ×TAR) |
-> | AMD MI355X 2025 (1400W x8) | 43.5 t/s (MTP=0) | (TBD, no environment available) |
-> | NVIDIA B200 2024 (1000W x8) | 0 t/s (MTP=0)  | (TBD, no environment available) |
-> 
-> |  | FP4 + No Tools | FP4 + Tool Use |
-> |  ----  | ----  | ----  |
-> | Kimi-K3 @ GSM8K | 96.9%  | 97.3% |
-> | Kimi-K3 @ AIME25 |  -  | 99.8% |
-> | Kimi-K3 @ AIME26 |  -  | 99.1% |
-> | GLM-5.2 @ GSM8K | 97.1%  | 97.8% |
-> | GLM-5.2 @ AIME25 | 96.1%  | 99.7% |
-> | GLM-5.2 @ AIME26 | 93.5%  | 99.6% |
+> ☑ MI300x8/MI325x8 (192GB PCIe5) for Kimi K3 (2.8TB): max-context-size = 1M
 >
-> ***K3 Known Issues***: *(1) Kimi K3 support for MI300x/MI325x instead of A100x8 (GLM-5 only); (2) Limited by device memory, Kimi K3 only enables bsz=1 for MI300x8 (to be fixed soon);*
+> ☑ MI300x1/MI325x1 (192GB PCIe5) for GLM-5.3-Flash (0.3TB): max-context-size = 200K
+> 
+> | Azure GPU Type | ***vLLM/SGL*** | ***Tutel*** |
+> |  ----  | ----  | ----  |
+> | AMD MI300X + GLM-5.3 (750W x8) | 0 t/s (MTP=0, OoM) | 761 t/s (MTP=0, GPU=8, BSZ=32) |
+> | AMD MI300X + GLM-5.3-Flash (750W x1) | 0 t/s (MTP=0, OoM) | 108 t/s (MTP=0, GPU=1) |
+> |   | 0 t/s (MTP=4, OoM) | 225 t/s ×TAR (MTP=4, GPU=1) |
+> | AMD MI300X + Kimi K3 (750W x8) | 0 t/s (MTP=0, OoM) | 73.4 t/s (MTP=0, GPU=8) |
+> |   | 0 t/s (MTP=8, OoM) | 287.1 t/s ×TAR (MTP=8, GPU=8) |
+> | AMD MI325X + Kimi K3 (1000W x8) | 3.1 t/s (MTP=0)  | 82.0 t/s (MTP=0, GPU=8) |
+> |   | 0 t/s (MTP=8, OoM) | 315.2 t/s ×TAR (MTP=8, GPU=8) |
+> | AMD MI355X + Kimi K3 (1400W x8) | 43.5 t/s (MTP=0) | (TBD, no environment available) |
+> | NVIDIA B200 + Kimi K3 (1000W x8) | 0 t/s (MTP=0)  | (TBD, no environment available) |
+> 
+> ***Known Issues***: * Limited by memory capacity, Only single-batch is supported for "Kimi K3 on MI300x8" and "GLM-5.3-Flash on MI300x1";*
 > 
 > ```sh
 > 
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
+>
+>   # Kimi K3 Model:
 >   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
 >   hf download --local-dir modal-labs/Kimi-K3-DFlash modal-labs/Kimi-K3-DFlash
 >
->   hf download --local-dir nvidia/GLM-5.2-NVFP4 nvidia/GLM-5.2-NVFP4
->   hf download --local-dir nvidia/GLM-5.1-NVFP4 nvidia/GLM-5.1-NVFP4
->   hf download --local-dir nvidia/GLM-5-NVFP4 nvidia/GLM-5-NVFP4
+>   # GLM-5.3 Model:
+>   hf download --local-dir Inferact/GLM-5.3-NVFP4 Inferact/GLM-5.3-NVFP4
+>
+>   # GLM-5.3-Flash Model:
+>   hf download --local-dir zai-org/GLM-5.3-Flash zai-org/GLM-5.3-Flash
 >
 > [ND_MI300_192G_v5: Serve Kimi-K3/GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260825 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260831 --serve=core \
+>         --try_path zai-org/GLM-5.3-Flash \
+>         --try_path Inferact/GLM-5.3-NVFP4 \
 >         --try_path moonshotai/Kimi-K3 \
->         --try_path nvidia/GLM-5.2-NVFP4 \
->         --try_path nvidia/GLM-5.1-NVFP4 \
->         --try_path nvidia/GLM-5-NVFP4 \
->         --max_seq_len 1000000
+>         --max_seq_len 200000
 >
-> [ND_A100_80G_v4: Serve GLM-5/5.1/5.2 (for Azure A100x8/H100x8/B200x8 SXM)]
+> [ND_A100_80G_v4: Serve GLM-5/5.1/5.2/5.3 (for Azure A100x8/H100x8/B200x8 SXM)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=core \
->         --try_path nvidia/GLM-5.2-NVFP4 \
->         --max_seq_len 1000000
+>         --try_path Inferact/GLM-5.3-NVFP4 \
+>         --max_seq_len 200000
 > ```
 > 
 > #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
@@ -116,6 +115,9 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=webui --listen_port 8000 \
+>         --try_path nvidia/GLM-5.2-NVFP4 \
+>         --try_path nvidia/GLM-5.1-NVFP4 \
+>         --try_path nvidia/GLM-5-NVFP4 \
 >         --try_path moonshotai/Kimi-K2.7-Code \
 >         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
@@ -129,6 +131,9 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20260707 --serve=webui --listen_port 8000 \
+>         --try_path nvidia/GLM-5.2-NVFP4 \
+>         --try_path nvidia/GLM-5.1-NVFP4 \
+>         --try_path nvidia/GLM-5-NVFP4 \
 >         --try_path moonshotai/Kimi-K2.7-Code \
 >         --try_path moonshotai/Kimi-K2.6 \
 >         --try_path nvidia/Kimi-K2.5-NVFP4 \
@@ -198,6 +203,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260831*: Add GLM-5.3/GLM-5.3-Flash Support on MI300 192GB PCIe-5.
+>
 > Image-*20260825*: Add DFlash Support for Kimi K3 on MI300 192GB PCIe-5.
 >
 > Image-*20260808*: Support 1M context for Kimi K3 on MI300 192GB PCIe-5.
