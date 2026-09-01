@@ -5,13 +5,13 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > [!TIP]
 > #### Steps for Kimi-K3/GLM-5.x (Claude-Code Mode):
 >
-> ☑ A100x8/H100x8 (80G SXM) for GLM-5.x (0.8TB): max-context-size = 1M
-> 
-> ☑ MI300x8/MI325x8 (192GB PCIe5) for GLM-5.x (0.8TB): max-context-size = 1M
-> 
-> ☑ MI300x8/MI325x8 (192GB PCIe5) for Kimi K3 (2.8TB): max-context-size = 1M
+> ✔️ MI300x8/MI325x8 (192GB PCIe5) for Kimi K3 (2.8TB): ✔️ max-context-size = 1M, ✔️ Vision
 >
-> ☑ MI300x1/MI325x1 (192GB PCIe5) for GLM-5.3-Flash (0.3TB): max-context-size = 200K
+> ✔️ MI300x1/MI325x1 (192GB PCIe5) for GLM-5.3-Flash (0.3TB): ✔️ max-context-size = 200K, ✔️ Vision
+> 
+> ✔️ MI300x8/MI325x8 (192GB PCIe5) for GLM-5.x (0.8TB): ✔️ max-context-size = 1M, ❌ Vision
+> 
+> ✔️ A100x8/H100x8 (80G SXM) for GLM-5.x (0.8TB): ✔️ max-context-size = 1M, ❌ Vision
 > 
 > | Azure GPU Type | ***vLLM/SGL*** | ***Tutel*** |
 > |  ----  | ----  | ----  |
@@ -25,8 +25,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > | AMD MI355X + Kimi K3 (1400W x8) | 43.5 t/s (MTP=0) | (TBD, no environment available) |
 > | NVIDIA B200 + Kimi K3 (1000W x8) | 0 t/s (MTP=0)  | (TBD, no environment available) |
 > 
-> ***Known Issues***: * Limited by memory capacity, Only single-batch is supported for "Kimi K3 on MI300x8" and "GLM-5.3-Flash on MI300x1";*
 > 
+> #### Azure Service:
 > ```sh
 > 
 > [Model Downloads]
@@ -46,7 +46,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260831 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20260902 --serve=core \
 >         --try_path zai-org/GLM-5.3-Flash \
 >         --try_path Inferact/GLM-5.3-NVFP4 \
 >         --try_path moonshotai/Kimi-K3 \
@@ -60,9 +60,19 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=core \
 >         --try_path Inferact/GLM-5.3-NVFP4 \
 >         --max_seq_len 200000
+>
+> ```
+>
+> #### Agent Examples:
+> ```sh
+> # Vision Example in the container (for GLM-5.3-Flash and Kimi-K3 only):
+> node-container:$ claude-unattended "What is this - https://i0.hdslb.com/bfs/archive/14c094d92aabe3f9a5c4356a66a122fc335239f2.jpg"
+>
+> # Text Example in the container:
+> node-container:$ claude-unattended "What time is it in PST?"
 > ```
 > 
-> #### Setup Claude Code for Linux / WSL (Ubuntu >= 24.04):
+> #### Agent Setup for Linux / WSL (Ubuntu >= 24.04):
 > ```sh
 > sudo apt-get install -y npm
 > sudo npm install -g @anthropic-ai/claude-code@2.1.197
@@ -79,7 +89,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ./run_claude.sh
 > ```
 > 
-> #### Setup Claude Code for Windows (>= 10.0):
+> #### Agent Setup for Windows (>= 10.0):
 > ```sh
 > winget install OpenJS.NodeJS.LTS
 > winget install --id Git.Git -e --source winget
@@ -187,7 +197,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```
 
 
-#### Inference TPOS for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/..:
+#### Inference TPS for DeepSeek-MoE/Qwen3-MoE/KimiK2-MoE/GptOSS-MoE/..:
 > |  ***Model \& Machine Type*** | ***Precision*** | ***SGL*** (no-MTP) | ***Tutel*** (no-MTP) |
 > |  ----  | ----  | ----  | ----  |
 > | $deepseek-ai/DeepSeek-V3.2\ (671B,\ A100 \times 8)$ | nvfp4 | - | 102 |
@@ -204,6 +214,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20260902*: Add Vision Support for Kimi-K3/GLM-5.3-Flash for MI300.
+>
 > Image-*20260831*: Add GLM-5.3/GLM-5.3-Flash Support on MI300 192GB PCIe-5.
 >
 > Image-*20260825*: Add DFlash Support for Kimi K3 on MI300 192GB PCIe-5.
