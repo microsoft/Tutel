@@ -40,14 +40,14 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download --local-dir Inferact/GLM-5.3-NVFP4 Inferact/GLM-5.3-NVFP4
 >
 >   # GLM-5.3-Flash Model:
->   hf download --local-dir zai-org/GLM-5.3-Flash zai-org/GLM-5.3-Flash
+>   hf download --local-dir nvidia/GLM-5.3-Flash-NVFP4 nvidia/GLM-5.3-Flash-NVFP4
 >
 > [ND_MI300_192G_v5: Serve Kimi-K3/GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20260902 --serve=core \
->         --try_path zai-org/GLM-5.3-Flash \
+>         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
 >         --try_path Inferact/GLM-5.3-NVFP4 \
 >         --try_path moonshotai/Kimi-K3 \
 >         --max_seq_len 200000 \
