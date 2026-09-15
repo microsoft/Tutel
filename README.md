@@ -75,13 +75,19 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > #### Agent Setup for Linux / WSL (Ubuntu >= 24.04):
 > ```sh
 > sudo apt-get install -y npm
-> sudo npm install -g @anthropic-ai/claude-code@2.1.197
+> sudo npm install -g @anthropic-ai/claude-code@2.1.199
 > cat > run_claude.sh <<EOF && chmod a+x run_claude.sh
 > mkdir -p config/
 > export ANTHROPIC_BASE_URL="http://0.0.0.0:8000"
 > export ANTHROPIC_API_KEY="sk-ant-api00-local-mock-key"
 > export CLAUDE_CONFIG_DIR="config"
 > export DISABLE_AUTOUPDATER=1
+> export API_TIMEOUT_MS=2147483647
+> export API_FORCE_IDLE_TIMEOUT=0
+> export CLAUDE_ENABLE_STREAM_WATCHDOG=0
+> export CLAUDE_ENABLE_BYTE_WATCHDOG=0
+> export CLAUDE_ENABLE_BYTE_WATCHDOG_BEDROCK=0
+> export CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS=0
 > echo '{"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}}' > config/.claude.json
 > claude
 > EOF
@@ -93,7 +99,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > ```sh
 > winget install OpenJS.NodeJS.LTS
 > winget install --id Git.Git -e --source winget
-> npm install -g @anthropic-ai/claude-code@2.1.197
+> npm install -g @anthropic-ai/claude-code@2.1.199
 >   (
 >     echo(@echo off
 >     echo(if not exist config mkdir config
@@ -101,6 +107,12 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >     echo(set ANTHROPIC_API_KEY=sk-ant-api00-local-mock-key
 >     echo(set CLAUDE_CONFIG_DIR=config
 >     echo(set DISABLE_AUTOUPDATER=1
+>     echo(set API_TIMEOUT_MS=2147483647
+>     echo(set API_FORCE_IDLE_TIMEOUT=0
+>     echo(set CLAUDE_ENABLE_STREAM_WATCHDOG=0
+>     echo(set CLAUDE_ENABLE_BYTE_WATCHDOG=0
+>     echo(set CLAUDE_ENABLE_BYTE_WATCHDOG_BEDROCK=0
+>     echo(set CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS=0
 >     echo(echo({"customApiKeyResponses": {"approved": ["api00-local-mock-key"]}} ^> config\.claude.json
 >     echo(claude
 > ) > run_claude.bat
