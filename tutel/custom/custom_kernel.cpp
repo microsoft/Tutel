@@ -1221,8 +1221,8 @@ std::tuple<torch::Tensor, torch::Tensor> warp_kimi_sigmoid_top_8_static_v2(
   int samples = logits_bf16.numel() / n_experts;
 
   auto device = logits_bf16.device();
-  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
-  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::empty({samples, 8}, torch::TensorOptions().dtype(torch::kInt32).device(device));
+  auto top_v_out = top_v_out_.has_value() ? top_v_out_.value().view({samples, -1}) : torch::zeros({samples, 8}, torch::TensorOptions().dtype(torch::kFloat32).device(device));
+  auto top_k_out = top_k_out_.has_value() ? top_k_out_.value().view({samples, -1}) : torch::zeros({samples, 8}, torch::TensorOptions().dtype(torch::kInt32).device(device));
   AT_ASSERTM(top_v_out.dtype() == torch::kFloat32 && top_k_out.dtype() == torch::kInt32, "Output tensor space should be float32 for top_scores and int32 for top_ids.");
 
   antares::ops::call("kimi_k2_sigmoid_top_k_routed_scaled_f32", {logits_bf16.view({samples, n_experts}), moe_gate_b_bf16, top_v_out, top_k_out}, {}, false, 0, 3);
