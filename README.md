@@ -2,6 +2,12 @@
 
 Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parallel solution proposing ["No-penalty Parallism/Sparsity/Capacity/.. Switching"](https://mlsys.org/media/mlsys-2023/Slides/2477.pdf) for modern training and inference that have dynamic behaviors. Support direct NVFP4/MXFP4/BlockwiseFP8 Inference for MoE-based GLM-5.x / DeepSeek-3.x / Kimi-2.x / Kimi-3.x / Qwen3 / Gpt-OSS using A100/A800/H100/MI300/..
 
+| GLM-5.3-Flash | Provider | Input 0% Hit (0-8K) | Input 90% Hit (0-8K) | Output (C1) |
+| --- | --- | --- | --- | --- |
+| <sub>MI300 ⚙️ (x1 GPU)</sub> | <sub>[Tutelgroup](https://github.com/microsoft/Tutel#azure-service)</sub> | <sub>**6,120** tok/s/chip</sub> | <sub>**32,191** tok/s/chip</sub> | <sub>**210** tok/s/chip</sub> |
+| <sub>RTXPro6K ⚙️⚙️ (x2 GPUs)</sub> | <sub>Public (SGL/..)</sub> | <sub>**3,100** tok/s/chip</sub> | <sub>**16,306** tok/s/chip</sub> | <sub>**98.7** tok/s/chip</sub> |
+| <sub>H200 ⚙️⚙️ (x2 GPUs)</sub> | <sub>Public (SGL/..)</sub> | <sub>**4,900** tok/s/chip</sub> | <sub>**25,774** tok/s/chip</sub> | <sub>**60.9** tok/s/chip</sub> |
+
 > [!TIP]
 > #### Steps for Kimi-K3/GLM-5.x (Claude-Code Mode):
 >
@@ -20,8 +26,6 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > |   | 0 t/s (MTP=4, OoM) | 225 t/s ×TAR (MTP=4, GPU=1) |
 > | AMD MI300X (750W x8) + Kimi K3 | 0 t/s (MTP=0, OoM) | 73.4 t/s (MTP=0, GPU=8) |
 > |   | 0 t/s (MTP=8, OoM) | 287.1 t/s ×TAR (MTP=8, GPU=8) |
-> | AMD MI325X (1000W x8) + Kimi K3 | 3.1 t/s (MTP=0)  | 82.0 t/s (MTP=0, GPU=8) |
-> |   | 0 t/s (MTP=8, OoM) | 315.2 t/s ×TAR (MTP=8, GPU=8) |
 > 
 > 
 > #### Azure Service:
@@ -30,21 +34,21 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > [Model Downloads]
 >   pip3 install -U "huggingface_hub[cli]" --upgrade
 >
->   # Kimi K3 Model:
->   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
->   hf download --local-dir modal-labs/Kimi-K3-DFlash modal-labs/Kimi-K3-DFlash
+>   # GLM-5.3-Flash Model:
+>   hf download --local-dir nvidia/GLM-5.3-Flash-NVFP4 nvidia/GLM-5.3-Flash-NVFP4
 >
 >   # GLM-5.3 Model:
 >   hf download --local-dir Inferact/GLM-5.3-NVFP4 Inferact/GLM-5.3-NVFP4
 >
->   # GLM-5.3-Flash Model:
->   hf download --local-dir nvidia/GLM-5.3-Flash-NVFP4 nvidia/GLM-5.3-Flash-NVFP4
+>   # Kimi K3 Model:
+>   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
+>   hf download --local-dir modal-labs/Kimi-K3-DFlash modal-labs/Kimi-K3-DFlash
 >
 > [ND_MI300_192G_v5: Serve Kimi-K3/GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20260929 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20261020 --serve=core \
 >         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
 >         --try_path Inferact/GLM-5.3-NVFP4 \
 >         --try_path moonshotai/Kimi-K3 \
@@ -55,26 +59,30 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 --runtime=runc -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20260929 --serve=core \
+>       tutelgroup/deepseek-671b:a100x8-chat-20261020 --serve=core \
 >         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
->         --max_seq_len 200000
+>         --max_seq_len 200000 \
+>         --thinking_effort high
 >
 > ```
 >
 > #### Agent Examples:
 > ```sh
-> # Vision Example in the container (for GLM-5.3-Flash and Kimi-K3 only):
+> # 📷 Vision Example in the container (for GLM-5.3-Flash and Kimi-K3 only):
 > node-container:$ claude-unattended "What is shown in the picture at https://i0.hdslb.com/bfs/archive/14c094d92aabe3f9a5c4356a66a122fc335239f2.jpg"
 >
-> # Audio Example in the container (for Windows only):
-> node-container:$ claude-unattended # Press <Win> + <H> to input text from audio..
+> # 🔊 Audio Example in the container (for Windows only):
+> node-container:$ claude-unattended # Press Keyboard <Win> + <H> to input text from audio.
 >
-> # Text Example in the container:
+> # 📝 Text Example in the container:
 > node-container:$ claude-unattended "What time is it in PST?"
 > ```
 > 
 > #### Agent Setup for Linux and Windows Subsystem Linux (Ubuntu >= 24.04):
 > ```sh
+> # Quick Health Check:
+> curl -L http://127.0.0.1:8000/v1/models
+> 
 > sudo apt-get install -y npm
 > sudo npm install -g @anthropic-ai/claude-code@2.1.199
 > curl -LO http://127.0.0.1:8000/claude.cmd
@@ -84,6 +92,9 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > 
 > #### Agent Setup for Windows (>= 10.0):
 > ```sh
+> # Quick Health Check:
+> curl -L http://127.0.0.1:8000/v1/models
+>
 > winget install OpenJS.NodeJS.LTS
 > winget install --id Git.Git -e --source winget
 > npm install -g @anthropic-ai/claude-code@2.1.199
@@ -200,6 +211,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20261020*: Improved Single-GPU MI300x GLM-5.3-Flash Experience.
+>
 > Image-*20260929*: Enable Multi-Concurrency for GLM-5.3-Flash; AMD HIP to 10.0.0.
 >
 > Image-*20260902*: Add Vision Support for Kimi-K3 and GLM-5.3-Flash for MI300.
