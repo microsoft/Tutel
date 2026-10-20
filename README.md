@@ -38,7 +38,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download --local-dir nvidia/GLM-5.3-Flash-NVFP4 nvidia/GLM-5.3-Flash-NVFP4
 >
 >   # GLM-5.3 Model:
->   hf download --local-dir Inferact/GLM-5.3-NVFP4 Inferact/GLM-5.3-NVFP4
+>   hf download --local-dir nvidia/GLM-5.3-NVFP4 nvidia/GLM-5.3-NVFP4
 >
 >   # Kimi K3 Model:
 >   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
@@ -50,7 +50,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
 >       tutelgroup/deepseek-671b:mi300x8-chat-20261020 --serve=core \
 >         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
->         --try_path Inferact/GLM-5.3-NVFP4 \
+>         --try_path nvidia/GLM-5.3-NVFP4 \
 >         --try_path moonshotai/Kimi-K3 \
 >         --max_seq_len 200000 \
 >         --thinking_effort high
@@ -115,14 +115,14 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   hf download nvidia/Kimi-K2.5-NVFP4 --local-dir nvidia/Kimi-K2.5-NVFP4
 >   hf download nvidia/Kimi-K2-Thinking-NVFP4 --local-dir nvidia/Kimi-K2-Thinking-NVFP4
 >   hf download nvidia/DeepSeek-V3.2-NVFP4 --local-dir nvidia/DeepSeek-V3.2-NVFP4
->   hf download Inferact/GLM-5.3-NVFP4 --local-dir Inferact/GLM-5.3-NVFP4
+>   hf download nvidia/GLM-5.3-NVFP4 --local-dir nvidia/GLM-5.3-NVFP4
 > 
 > [DeepSeek V3.2 Long-Context (for Azure A100x8/H100x8/B200x8 SXM)]
 >   docker run -e LOCAL_SIZE=8 -e WORKER=1 -it --rm --ipc=host --net=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) -v /tmp:/tmp \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
 >       tutelgroup/deepseek-671b:a100x8-chat-20260707 --serve=webui --listen_port 8000 \
->         --try_path Inferact/GLM-5.3-NVFP4 \
+>         --try_path nvidia/GLM-5.3-NVFP4 \
 >         --try_path nvidia/GLM-5.2-NVFP4 \
 >         --try_path nvidia/GLM-5.1-NVFP4 \
 >         --try_path nvidia/GLM-5-NVFP4 \
