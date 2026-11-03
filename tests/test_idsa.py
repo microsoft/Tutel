@@ -62,7 +62,7 @@ def judge(result, answer, Q, rank):
       predict = predict.split('=')[-1]
       if len(predict) > 50:
         raise
-      is_match = is_match or (str(truth) in str(predict))
+      is_match = is_match or (str(truth) in str(predict)) # To avoid issues like: "27" != "\boxed{A+B=27}"
     except:
       pass
     print(f'[{rank}] {predict} v.s. {truth}, is_match = {is_match}', flush=True)
