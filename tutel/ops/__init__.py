@@ -83,6 +83,80 @@ def to_float4_groupwise(w, scale_target=448.0, clip_ratio=1.0):
     scale_b = (scale_b / scale_o).clamp(max=fp8_max).to(torch.float8_e4m3fn).view(*w.shape[:-1], w.shape[-1] // group_size)
     return (fp4_vals[0] + (fp4_vals[1] << 4)).squeeze(-1), scale_b, scale_o
 
+
+
+def to_float4_groupwise_modelopt(w, scale_target=448.0, clip_ratio=1.0):
+    group_size = 16
+
+    if not isinstance(w, torch.Tensor):
+        raise TypeError("w must be a torch.Tensor")
+    if w.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        raise TypeError("w must have dtype float16, bfloat16, or float32")
+    if w.ndim == 0 or w.numel() == 0 or w.shape[-1] % group_size:
+        raise ValueError(
+            "w must be nonempty with its last dimension divisible by 16"
+        )
+
+    import math
+    scale_target, clip_ratio = float(scale_target), float(clip_ratio)
+    if not math.isfinite(scale_target) or scale_target <= 0:
+        raise ValueError("scale_target must be finite and positive")
+    if not math.isfinite(clip_ratio) or not 0 < clip_ratio <= 1:
+        raise ValueError("clip_ratio must be finite and in (0, 1]")
+
+    with torch.no_grad():
+        x = w.reshape(-1, group_size)
+        block_amax = x.abs().amax(dim=-1, keepdim=True).float()
+
+        if not torch.isfinite(block_amax).all().item():
+            raise ValueError("w must contain only finite values")
+
+        global_amax = block_amax.amax()
+        scale_o = (global_amax * clip_ratio) / (6.0 * scale_target)
+
+        scale_o = torch.where(
+            global_amax == 0, torch.ones_like(scale_o), scale_o
+        )
+        if not (torch.isfinite(scale_o) & (scale_o > 0)).item():
+            raise ValueError(
+                "the global scale is not representable as positive FP32"
+            )
+
+        scale_b = (block_amax * clip_ratio) / (6.0 * scale_o)
+        scale_b = torch.where(
+            scale_b == 0, torch.ones_like(scale_b), scale_b
+        )
+        scale_b = scale_b.clamp(
+            min=2.0**-9, max=448.0
+        ).to(torch.float8_e4m3fn)
+
+        scaled = x / (scale_b.float() * scale_o)
+        magnitude = scaled.abs()
+
+        boundaries = torch.tensor(
+            [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0],
+            dtype=torch.float32,
+            device=w.device,
+        )
+        codes = torch.bucketize(
+            magnitude, boundaries, right=False
+        ).to(torch.uint8)
+
+        round_up = (
+            (magnitude == 0.75)
+            | (magnitude == 1.75)
+            | (magnitude == 3.5)
+        )
+        codes = codes + round_up.to(torch.uint8)
+        codes = codes | ((scaled < 0).to(torch.uint8) << 3)
+        codes = codes.reshape(w.shape)
+        packed = codes[..., 0::2] | (codes[..., 1::2] << 4)
+        scale_b = scale_b.reshape(
+            *w.shape[:-1], w.shape[-1] // group_size
+        )
+        return packed, scale_b, scale_o
+
+
 def from_float4_groupwise(w, scale, scale_o=None, input_scale=None, dtype=torch.bfloat16):
   assert w.dtype == torch.uint8
   fp4_e2m1_table = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=torch.bfloat16, device=w.device)

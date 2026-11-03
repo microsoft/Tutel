@@ -40,15 +40,19 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   # GLM-5.3 Model:
 >   hf download --local-dir nvidia/GLM-5.3-NVFP4 nvidia/GLM-5.3-NVFP4
 >
->   # Kimi K3 Model:
+>   # Kimi K3 Model (for MI300):
 >   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
 >   hf download --local-dir modal-labs/Kimi-K3-DFlash modal-labs/Kimi-K3-DFlash
+>
+>   # FastH3 V2 Model (for MI300):
+>   hf download --local-dir FastVideo/FastVideo-FastH3-8-Step-V2-FP8 FastVideo/FastVideo-FastH3-8-Step-V2-FP8
 >
 > [ND_MI300_192G_v5: Serve Kimi-K3/GLM-5/5.1/5.2 (for Azure MI300x8 PCIe)]
 >   docker run -e WORKER=1 -e LOCAL_SIZE=8 -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --device=/dev/kfd --device=/dev/dri --group-add=video \
->       tutelgroup/deepseek-671b:mi300x8-chat-20261020 --serve=core \
+>       tutelgroup/deepseek-671b:mi300x8-chat-20261104 --serve=core \
+>         --try_path FastVideo/FastVideo-FastH3-8-Step-V2-FP8 \
 >         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
 >         --try_path nvidia/GLM-5.3-NVFP4 \
 >         --try_path moonshotai/Kimi-K3 \
@@ -211,6 +215,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
+> Image-*20261104*: Add FastH3-V2 Support for Azure MI300.
+>
 > Image-*20261020*: Improved Single-GPU MI300x GLM-5.3-Flash Experience.
 >
 > Image-*20260929*: Enable Multi-Concurrency for GLM-5.3-Flash; AMD HIP to 10.0.0.
