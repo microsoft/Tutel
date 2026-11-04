@@ -4,14 +4,14 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 | GLM-5.3-Flash | Provider | Input 0% Hit (0-8K) | Input 90% Hit (0-8K) | Output (C1) |
 | --- | --- | --- | --- | --- |
-| <sub>MI300 ⚙️ (x1 GPU)</sub> | <sub>[Tutelgroup](https://github.com/microsoft/Tutel#azure-service)</sub> | <sub>**6,120** tok/s/chip</sub> | <sub>**32,191** tok/s/chip</sub> | <sub>**210** tok/s/chip</sub> |
+| <sub>MI300 ⚙️ (x1 GPU)</sub> | <sub>[Tutelgroup](https://github.com/microsoft/Tutel#azure-service)</sub> | <sub>**7,344** tok/s/chip</sub> | <sub>**38,629** tok/s/chip</sub> | <sub>**210** tok/s/chip</sub> |
 | <sub>RTXPro6K ⚙️⚙️ (x2 GPUs)</sub> | <sub>Public (SGL/..)</sub> | <sub>**3,100** tok/s/chip</sub> | <sub>**16,306** tok/s/chip</sub> | <sub>**98.7** tok/s/chip</sub> |
 | <sub>H200 ⚙️⚙️ (x2 GPUs)</sub> | <sub>Public (SGL/..)</sub> | <sub>**4,900** tok/s/chip</sub> | <sub>**25,774** tok/s/chip</sub> | <sub>**60.9** tok/s/chip</sub> |
 
 > [!TIP]
 > #### Steps for Kimi-K3/GLM-5.x (Claude-Code Mode):
 >
-> ✔️ MI300x8/MI325x8 (192GB PCIe5) for Kimi K3 (2.8TB): ✔️ max-context-size = 1M, ✔️ Vision
+> ✔️ MI300x8/MI325x8 (192GB PCIe5) for Kimi K3/K3.1 (2.8TB): ✔️ max-context-size = 1M, ✔️ Vision
 >
 > ✔️ MI300x1/MI325x1 (192GB PCIe5) for GLM-5.3-Flash (0.3TB): ✔️ max-context-size = 200K, ✔️ Vision
 > 
@@ -21,10 +21,10 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 > 
 > | Azure GPU Type | ***vLLM/SGL*** | ***Tutel*** |
 > |  ----  | ----  | ----  |
-> | AMD MI300X (750W x8) + GLM-5.3 | 0 t/s (MTP=0, OoM) | 761 t/s (MTP=0, GPU=8, BSZ=32) |
+> | AMD MI300X (750W x8) + GLM-5.3 | 0 t/s (MTP=0, OoM) | 884 t/s (MTP=0, GPU=8, BSZ=32) |
 > | AMD MI300X (750W x1) + GLM-5.3-Flash | 0 t/s (MTP=0, OoM) | 108 t/s (MTP=0, GPU=1) |
 > |   | 0 t/s (MTP=4, OoM) | 225 t/s ×TAR (MTP=4, GPU=1) |
-> | AMD MI300X (750W x8) + Kimi K3 | 0 t/s (MTP=0, OoM) | 73.4 t/s (MTP=0, GPU=8) |
+> | AMD MI300X (750W x8) + Kimi K3/K3.1-Pro | 0 t/s (MTP=0, OoM) | 73.4 t/s (MTP=0, GPU=8) |
 > |   | 0 t/s (MTP=8, OoM) | 287.1 t/s ×TAR (MTP=8, GPU=8) |
 > 
 > 
@@ -40,7 +40,8 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   # GLM-5.3 Model:
 >   hf download --local-dir nvidia/GLM-5.3-NVFP4 nvidia/GLM-5.3-NVFP4
 >
->   # Kimi K3 Model (for MI300):
+>   # Kimi K3/K3.1-Pro Model (for MI300):
+>   hf download --local-dir moonshotai/Kimi-K3.1-Pro moonshotai/Kimi-K3.1-Pro
 >   hf download --local-dir moonshotai/Kimi-K3 moonshotai/Kimi-K3
 >   hf download --local-dir modal-labs/Kimi-K3-DFlash modal-labs/Kimi-K3-DFlash
 >
@@ -55,6 +56,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >         --try_path FastVideo/FastVideo-FastH3-8-Step-V2-FP8 \
 >         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
 >         --try_path nvidia/GLM-5.3-NVFP4 \
+>         --try_path moonshotai/Kimi-K3.1-Pro \
 >         --try_path moonshotai/Kimi-K3 \
 >         --max_seq_len 200000 \
 >         --thinking_effort high
@@ -215,7 +217,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 
 ## What's New:
 
-> Image-*20261104*: Add FastH3-V2 Support for Azure MI300.
+> Image-*20261104*: Add FastH3-V2 / Kimi-K3.1-Pro Support for Azure MI300.
 >
 > Image-*20261020*: Improved Single-GPU MI300x GLM-5.3-Flash Experience.
 >
