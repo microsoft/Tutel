@@ -65,7 +65,7 @@ Tutel MoE: An Optimized Mixture-of-Experts Implementation, also the first parall
 >   docker run -e WORKER=1 --runtime=runc -p 8000:8000 -it --rm --ipc=host --shm-size=8g \
 >       --ulimit memlock=-1 --ulimit stack=67108864 -v /:/host -w /host$(pwd) \
 >       -v /usr/lib/x86_64-linux-gnu/libcuda.so.1:/usr/lib/x86_64-linux-gnu/libcuda.so.1 --privileged \
->       tutelgroup/deepseek-671b:a100x8-chat-20261020 --serve=core \
+>       tutelgroup/deepseek-671b:a100x8-chat-20261104 --serve=core \
 >         --try_path nvidia/GLM-5.3-Flash-NVFP4 \
 >         --max_seq_len 200000 \
 >         --thinking_effort high
